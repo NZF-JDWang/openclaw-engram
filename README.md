@@ -99,6 +99,10 @@ Legacy aliases such as `personaFile`, `collections`, `autoIndexOnStart`, `embedd
 
 When `summarizationProvider` and `summarizationModel` are omitted, Engram uses the active OpenClaw runtime defaults. If runtime subagents are unavailable or the summarizer call fails, compaction falls back to the built-in deterministic summarizer.
 
+## Known Tradeoff
+
+Engram currently performs compaction inline in `afterTurn`. That keeps the implementation simple and deterministic, but it can reduce prompt-cache hit rates on hosts that benefit from deferred or cache-aware compaction strategies. This is a known performance tradeoff, not a data-integrity issue.
+
 ## Storage Layout
 
 Primary files:

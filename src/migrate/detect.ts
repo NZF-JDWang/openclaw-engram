@@ -50,11 +50,11 @@ function resolveQmdDbPaths(env: NodeJS.ProcessEnv): string[] {
   const explicitCacheDir = env.QMD_CACHE_DIR?.trim();
   if (explicitCacheDir) {
     candidates.add(explicitCacheDir);
-  }
-
-  candidates.add(join(homedir(), ".cache", "qmd"));
-  if (env.LOCALAPPDATA?.trim()) {
-    candidates.add(join(env.LOCALAPPDATA.trim(), "qmd"));
+  } else {
+    candidates.add(join(homedir(), ".cache", "qmd"));
+    if (env.LOCALAPPDATA?.trim()) {
+      candidates.add(join(env.LOCALAPPDATA.trim(), "qmd"));
+    }
   }
 
   const sqliteFiles: string[] = [];

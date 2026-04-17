@@ -88,6 +88,25 @@ describe("rememberFact", () => {
     expect(fact.expiresAt).toBeTruthy();
   });
 
+  it("keeps agent-inferred facts pending instead of auto-promoting them", () => {
+    const root = mkdtempSync(join(tmpdir(), "engram-facts-agent-inferred-"));
+    tempPaths.push(root);
+    const dbPath = join(root, "engram.db");
+    const database = openDatabase(dbPath);
+    database.close();
+    const config = resolveEngramConfig({ dbPath });
+
+    const fact = rememberFact(config, {
+      content: "Use sqlite for the Engram store.",
+      memoryClass: "project",
+      sourceKind: "agent_inferred",
+    });
+
+    expect(fact.approvalState).toBe("pending");
+    expect(listPendingFacts(config).map((entry) => entry.factId)).toContain(fact.factId);
+    expect(searchApprovedFacts(config, "sqlite engram store", 5)).toHaveLength(0);
+  });
+
   it("approves or rejects pending facts and exports the resulting ledger", () => {
     const root = mkdtempSync(join(tmpdir(), "engram-facts-review-"));
     tempPaths.push(root);
