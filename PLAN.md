@@ -818,24 +818,26 @@ Once engram is stable (v1.0), `lossless-claw`, `qmd`, and `precog` should be mar
 
 ## Verification Checklist
 
-- [ ] `npm install && npx tsc --noEmit` — zero TypeScript errors
+- [x] `npm install && npx tsc --noEmit` — zero TypeScript errors
 - [ ] `/engram doctor` runs before full engine is wired — surface environment issues early
 - [ ] `openclaw plugins install ./engram` — installs, no errors in openclaw log
 - [ ] `/engram migrate --dry-run` — detects existing lossless-claw/qmd data correctly
 - [ ] `/engram migrate` — imports data, idempotent on re-run
 - [ ] New session starts — `[engram] context engine activated` in log
-- [ ] After 10+ turns — `engram.db` contains rows in `summaries` table, Layer A messages intact
-- [ ] `/engram status` — prints session + KB stats including pending approvals
+- [x] After 10+ turns — `engram.db` contains rows in `summaries` table, Layer A messages intact
+- [x] `/engram status` — prints session + KB stats including pending approvals
 - [ ] Add markdown collection in config, run `/engram index` — BM25 search returns results within 150ms
-- [ ] Ask a question about indexed content — recall XML appears in system prompt with source_kind attribution
-- [ ] Configure Ollama `embedApiUrl`, re-index — `kb_embeddings` rows populated as binary blobs
+- [x] Ask a question about indexed content — recall XML appears in system prompt with source_kind attribution
+- [x] Configure Ollama `embedApiUrl`, re-index — `kb_embeddings` rows populated as binary blobs
 - [ ] `/engram compact` — forced compaction, new summary rows created, context_items updated
-- [ ] `engram_remember` with `memory_class: "identity"` — fact appears in `kb_facts` with `approval_state: "pending"`, NOT in `persona.md`
-- [ ] `/engram review` — shows pending fact, approve it, verify it appears in `persona.md`
-- [ ] `engram_forget` — entry has `deprecated_at` set, disappears from search, row still exists for audit
+- [x] `engram_remember` with `memory_class: "identity"` — fact appears in `kb_facts` with `approval_state: "pending"`, NOT in `persona.md`
+- [x] `/engram review` — shows pending fact, approve it, verify it appears in `persona.md`
+- [x] `engram_forget` — entry has `deprecated_at` set, disappears from search, row still exists for audit
 - [ ] `/engram export` — markdown file written, re-indexable
-- [ ] Start second session — `<prior_session>` block sources from `session_end_artifact`, not deepest summary
-- [ ] Chaos: LLM timeout during compaction → extractive fallback runs → summary with `[Summarized — extractive fallback]` written
-- [ ] Chaos: embedding endpoint down mid-index → partial index completed, no crash, doctor shows partial coverage
-- [ ] All unit tests pass: `npm test`
-- [ ] Integration test: `full-session.test.ts` and `recall-pipeline.test.ts` pass
+- [x] Start second session — `<prior_session>` block sources from `session_end_artifact`, not deepest summary
+- [x] Chaos: LLM timeout during compaction → extractive fallback runs → summary with `[Summarized — extractive fallback]` written
+- [x] Chaos: embedding endpoint down mid-index → partial index completed, no crash, doctor shows partial coverage
+- [x] All unit tests pass: `npm test`
+- [x] Integration test: `full-session.test.ts` and `recall-pipeline.test.ts` pass
+
+Host-level install and smoke checks remain blocked in this workspace because the `openclaw` CLI is not installed.
