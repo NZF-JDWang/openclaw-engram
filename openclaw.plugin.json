@@ -1,0 +1,26 @@
+{
+  "id": "engram",
+  "kind": "context-engine",
+  "uiHints": {
+    "enabled": {
+      "label": "Enabled",
+      "help": "Enable or disable Engram without uninstalling it"
+    },
+    "dbPath": {
+      "label": "Database Path",
+      "help": "Path to the Engram SQLite database (default: <OPENCLAW_STATE_DIR>/engram.db; falls back to ~/.openclaw/engram.db)"
+    },
+    "recallEnabled": {
+      "label": "Recall Enabled",
+      "help": "Enable proactive memory injection before prompt build"
+    },
+    "kbEnabled": {
+      "label": "Knowledge Base Enabled",
+      "help": "Enable indexing and retrieval for markdown collections"
+    },
+    "embedEnabled": {
+      "label": "Embeddings Enabled",
+      "help": "Enable optional embedding-based reranking via an OpenAI-compatible endpoint"
+    }
+  }
+}

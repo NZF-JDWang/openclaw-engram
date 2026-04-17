@@ -1,0 +1,42 @@
+{
+  "name": "@martian-engineering/engram",
+  "version": "0.1.0",
+  "description": "Unified OpenClaw memory plugin combining context compaction, KB indexing, and proactive recall",
+  "type": "module",
+  "main": "dist/index.js",
+  "license": "MIT",
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "memory",
+    "context-engine",
+    "retrieval",
+    "sqlite"
+  ],
+  "scripts": {
+    "build": "esbuild index.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/index.js --external:openclaw --external:\"@mariozechner/*\" --minify-whitespace",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "files": [
+    "dist/",
+    "openclaw.plugin.json",
+    "PLAN.md"
+  ],
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  }
+}

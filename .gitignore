@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+*.log
+*.tmp
+*.temp
+*.db
+*.db-shm
+*.db-wal
+engram-persona.md
+engram-export.md
+.DS_Store
+Thumbs.db
