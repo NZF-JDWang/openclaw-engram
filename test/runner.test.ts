@@ -47,12 +47,17 @@ describe("runMigrationDryRun", () => {
     const root = mkdtempSync(join(tmpdir(), "engram-runner-qmd-"));
     tempPaths.push(root);
 
+    const stateDir = join(root, "missing-state");
     const qmdDir = join(root, "qmd");
+    mkdirSync(stateDir, { recursive: true });
     mkdirSync(qmdDir, { recursive: true });
     const qmdPath = join(qmdDir, "index.sqlite");
     buildQmdFixture(qmdPath, { withVectorsVec: false });
 
-    const report = runMigrationDryRun({ QMD_CACHE_DIR: qmdDir } as NodeJS.ProcessEnv);
+    const report = runMigrationDryRun({
+      OPENCLAW_STATE_DIR: stateDir,
+      QMD_CACHE_DIR: qmdDir,
+    } as NodeJS.ProcessEnv);
 
     expect(report.inspections).toHaveLength(1);
     expect(report.inspections[0]?.warnings[0]).toContain("vectors_vec");

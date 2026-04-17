@@ -23,14 +23,16 @@ describe("initializeEngramDatabase", () => {
     tempPaths.push(root);
 
     const stateDir = join(root, "state");
+    const qmdDir = join(root, "qmd");
     mkdirSync(stateDir, { recursive: true });
+    mkdirSync(qmdDir, { recursive: true });
     const lcmPath = join(stateDir, "lcm.db");
     buildLcmFixture(lcmPath);
 
     const config = resolveEngramConfig({ dbPath: join(root, "engram.db") });
     const result = initializeEngramDatabase(
       config,
-      { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
+      { OPENCLAW_STATE_DIR: stateDir, QMD_CACHE_DIR: qmdDir } as NodeJS.ProcessEnv,
     );
 
     try {
@@ -54,14 +56,22 @@ describe("initializeEngramDatabase", () => {
     tempPaths.push(root);
 
     const stateDir = join(root, "state");
+    const qmdDir = join(root, "qmd");
     mkdirSync(stateDir, { recursive: true });
+    mkdirSync(qmdDir, { recursive: true });
     buildLcmFixture(join(stateDir, "lcm.db"));
 
     const config = resolveEngramConfig({ dbPath: join(root, "engram.db") });
-    const initial = initializeEngramDatabase(config, { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv);
+    const initial = initializeEngramDatabase(
+      config,
+      { OPENCLAW_STATE_DIR: stateDir, QMD_CACHE_DIR: qmdDir } as NodeJS.ProcessEnv,
+    );
     initial.database.close();
 
-    const result = initializeEngramDatabase(config, { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv);
+    const result = initializeEngramDatabase(
+      config,
+      { OPENCLAW_STATE_DIR: stateDir, QMD_CACHE_DIR: qmdDir } as NodeJS.ProcessEnv,
+    );
 
     try {
       expect(result.migrationReport).toBeUndefined();
