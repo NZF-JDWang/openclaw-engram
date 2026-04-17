@@ -4,7 +4,7 @@ import { readdir } from "node:fs/promises";
 import type { DatabaseSync } from "node:sqlite";
 import { basename, extname, relative, resolve } from "node:path";
 import type { EngramConfig, EngramKbCollection } from "../config.js";
-import { openDatabase } from "../db/connection.js";
+import { openDatabase, retryOnBusy } from "../db/connection.js";
 import { estimateTokens } from "../token-estimate.js";
 import { chunkDocument } from "./chunker.js";
 import { EmbeddingClient, encodeEmbedding } from "./embeddings.js";
@@ -219,7 +219,7 @@ function upsertDocument(
   const indexedChunks: Array<{ chunkId: string; text: string }> = [];
   const ftsAvailable = hasFtsTable(db);
 
-  db.exec("BEGIN IMMEDIATE");
+  retryOnBusy(() => db.exec("BEGIN IMMEDIATE"));
   try {
     db.prepare(`DELETE FROM kb_embeddings WHERE chunk_id IN (SELECT chunk_id FROM kb_chunks WHERE doc_id = ?)`)
       .run(docId);

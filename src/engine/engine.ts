@@ -10,7 +10,7 @@ import type {
   PluginRuntime,
 } from "openclaw/plugin-sdk";
 import type { EngramConfig } from "../config.js";
-import type { EngramDatabase } from "../db/connection.js";
+import { retryOnBusy, type EngramDatabase } from "../db/connection.js";
 import { indexSessionSummaryById } from "../kb/indexer.js";
 import { estimateTokens } from "../token-estimate.js";
 import { assembleConversationContext } from "./assembler.js";
@@ -54,7 +54,7 @@ export class EngramContextEngine implements ContextEngine {
     const messageId = randomUUID();
     const seq = this.nextSequence(params.sessionId);
     const ordinal = this.nextContextOrdinal(params.sessionId);
-    this.database.db.exec("BEGIN IMMEDIATE");
+    retryOnBusy(() => this.database.db.exec("BEGIN IMMEDIATE"));
     try {
       this.database.db.prepare(`
         INSERT INTO messages (message_id, conversation_id, seq, role, content, token_count, created_at)

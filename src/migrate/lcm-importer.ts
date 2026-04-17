@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import { retryOnBusy } from "../db/connection.js";
 
 export type LcmImportResult = {
   imported: boolean;
@@ -114,7 +115,7 @@ export function importFromLcm(sourcePath: string, destDb: DatabaseSync): LcmImpo
       ? (sourceDb.prepare(`SELECT file_id, conversation_id, file_name, mime_type, byte_size, storage_uri, exploration_summary, created_at FROM large_files`).all() as LcmLargeFileRow[])
       : [];
 
-    destDb.exec("BEGIN IMMEDIATE");
+    retryOnBusy(() => destDb.exec("BEGIN IMMEDIATE"));
     try {
       const insertConversation = destDb.prepare(`
         INSERT OR IGNORE INTO conversations (conversation_id, session_id, session_key, created_at)

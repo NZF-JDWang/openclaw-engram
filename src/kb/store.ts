@@ -3,6 +3,8 @@ import { DatabaseSync } from "node:sqlite";
 import type { EngramConfig } from "../config.js";
 import { EmbeddingClient, decodeEmbedding } from "./embeddings.js";
 
+const LIKE_FALLBACK_MAX_CHUNKS = 5_000;
+
 export type KBSearchRow = {
   chunkId: string;
   docId: string;
@@ -132,43 +134,98 @@ function queryLexicalRows(
   indexedAt: string;
   derivationDepth: number;
 }> {
-  if (hasFtsTable(db)) {
-    const params: string[] = [tokens.map(escapeFtsToken).join(" OR ")];
-    let sql = `
-      SELECT
-        kc.chunk_id AS chunkId,
-        kd.doc_id AS docId,
-        kd.collection_name AS collectionName,
-        kd.rel_path AS relPath,
-        kd.title AS title,
-        kc.content AS content,
-        kd.indexed_at AS indexedAt,
-        kc.derivation_depth AS derivationDepth
-      FROM kb_chunks_fts
-      JOIN kb_chunks kc ON kc.chunk_id = kb_chunks_fts.chunk_id
-      JOIN kb_documents kd ON kd.doc_id = kc.doc_id
-      WHERE kb_chunks_fts MATCH ?
-    `;
-    if (collection) {
-      sql += ` AND kd.collection_name = ?`;
-      params.push(collection);
-    }
-    sql += ` ORDER BY bm25(kb_chunks_fts), kd.indexed_at DESC, kc.ordinal ASC`;
-    const ftsRows = db.prepare(sql).all(...params) as Array<{
-      chunkId: string;
-      docId: string;
-      collectionName: string;
-      relPath: string;
-      title: string;
-      content: string;
-      indexedAt: string;
-      derivationDepth: number;
-    }>;
-    if (ftsRows.length > 0) {
-      return ftsRows;
-    }
+  const availability = readCollectionAvailability(db, collection);
+  const rows: Array<{
+    chunkId: string;
+    docId: string;
+    collectionName: string;
+    relPath: string;
+    title: string;
+    content: string;
+    indexedAt: string;
+    derivationDepth: number;
+  }> = [];
+
+  if (hasFtsTable(db) && availability.ftsCollections.length > 0) {
+    rows.push(...queryFtsRows(db, tokens, availability.ftsCollections));
   }
 
+  if (availability.fallbackCollections.length > 0) {
+    if (availability.fallbackChunkCount > LIKE_FALLBACK_MAX_CHUNKS) {
+      throw new Error(
+        `FTS5 is unavailable for collection${availability.fallbackCollections.length === 1 ? "" : "s"} ${availability.fallbackCollections.join(", ")} and LIKE fallback is disabled above ${LIKE_FALLBACK_MAX_CHUNKS} chunks.`,
+      );
+    }
+    warnSearchTimeout(
+      `KB FTS5 unavailable; using LIKE fallback for ${availability.fallbackChunkCount} chunk${availability.fallbackChunkCount === 1 ? "" : "s"}.`,
+    );
+    rows.push(...queryLikeRows(db, tokens, availability.fallbackCollections));
+  }
+
+  return rows;
+}
+
+function queryFtsRows(
+  db: DatabaseSync,
+  tokens: string[],
+  collections: string[],
+): Array<{
+  chunkId: string;
+  docId: string;
+  collectionName: string;
+  relPath: string;
+  title: string;
+  content: string;
+  indexedAt: string;
+  derivationDepth: number;
+}> {
+  const params: string[] = [tokens.map(escapeFtsToken).join(" OR ")];
+  let sql = `
+    SELECT
+      kc.chunk_id AS chunkId,
+      kd.doc_id AS docId,
+      kd.collection_name AS collectionName,
+      kd.rel_path AS relPath,
+      kd.title AS title,
+      kc.content AS content,
+      kd.indexed_at AS indexedAt,
+      kc.derivation_depth AS derivationDepth
+    FROM kb_chunks_fts
+    JOIN kb_chunks kc ON kc.chunk_id = kb_chunks_fts.chunk_id
+    JOIN kb_documents kd ON kd.doc_id = kc.doc_id
+    WHERE kb_chunks_fts MATCH ?
+  `;
+  if (collections.length > 0) {
+    sql += ` AND kd.collection_name IN (${collections.map(() => "?").join(", ")})`;
+    params.push(...collections);
+  }
+  sql += ` ORDER BY bm25(kb_chunks_fts), kd.indexed_at DESC, kc.ordinal ASC`;
+  return db.prepare(sql).all(...params) as Array<{
+    chunkId: string;
+    docId: string;
+    collectionName: string;
+    relPath: string;
+    title: string;
+    content: string;
+    indexedAt: string;
+    derivationDepth: number;
+  }>;
+}
+
+function queryLikeRows(
+  db: DatabaseSync,
+  tokens: string[],
+  collections: string[],
+): Array<{
+  chunkId: string;
+  docId: string;
+  collectionName: string;
+  relPath: string;
+  title: string;
+  content: string;
+  indexedAt: string;
+  derivationDepth: number;
+}> {
   const whereClauses = tokens.map(() => `LOWER(kc.content) LIKE ?`).join(" OR ");
   const params: string[] = tokens.map((token) => `%${token}%`);
   let sql = `
@@ -185,9 +242,9 @@ function queryLexicalRows(
     JOIN kb_documents kd ON kd.doc_id = kc.doc_id
     WHERE (${whereClauses})
   `;
-  if (collection) {
-    sql += ` AND kd.collection_name = ?`;
-    params.push(collection);
+  if (collections.length > 0) {
+    sql += ` AND kd.collection_name IN (${collections.map(() => "?").join(", ")})`;
+    params.push(...collections);
   }
   sql += ` ORDER BY kd.indexed_at DESC, kc.ordinal ASC`;
   return db.prepare(sql).all(...params) as Array<{
@@ -200,6 +257,72 @@ function queryLexicalRows(
     indexedAt: string;
     derivationDepth: number;
   }>;
+}
+
+function readCollectionAvailability(
+  db: DatabaseSync,
+  collection?: string,
+): {
+  ftsCollections: string[];
+  fallbackCollections: string[];
+  fallbackChunkCount: number;
+} {
+  const hasFts = hasFtsTable(db);
+  const rows = db.prepare(`
+    SELECT
+      c.name AS name,
+      c.fts5_available AS fts5Available,
+      COALESCE(k.chunkCount, 0) AS chunkCount
+    FROM kb_collections c
+    LEFT JOIN (
+      SELECT collection_name, COUNT(*) AS chunkCount
+      FROM kb_chunks
+      GROUP BY collection_name
+    ) k ON k.collection_name = c.name
+    ${collection ? "WHERE c.name = ?" : ""}
+    ORDER BY c.name ASC
+  `).all(...(collection ? [collection] : [])) as Array<{
+    name: string;
+    fts5Available: number;
+    chunkCount: number;
+  }>;
+
+  if (rows.length === 0) {
+    return {
+      ftsCollections: collection && hasFts ? [collection] : [],
+      fallbackCollections: collection && !hasFts ? [collection] : [],
+      fallbackChunkCount: collection ? countChunksForCollections(db, [collection]) : 0,
+    };
+  }
+
+  return rows.reduce(
+    (accumulator, row) => {
+      if (hasFts && row.fts5Available === 1) {
+        accumulator.ftsCollections.push(row.name);
+      } else {
+        accumulator.fallbackCollections.push(row.name);
+        accumulator.fallbackChunkCount += row.chunkCount;
+      }
+      return accumulator;
+    },
+    {
+      ftsCollections: [] as string[],
+      fallbackCollections: [] as string[],
+      fallbackChunkCount: 0,
+    },
+  );
+}
+
+function countChunksForCollections(db: DatabaseSync, collections: string[]): number {
+  if (collections.length === 0) {
+    return 0;
+  }
+  const row = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM kb_chunks
+    WHERE collection_name IN (${collections.map(() => "?").join(", ")})
+  `).get(...collections) as { count?: number } | undefined;
+  return row?.count ?? 0;
 }
 
 function fetchDocumentContent(db: DatabaseSync, docId: string): string {

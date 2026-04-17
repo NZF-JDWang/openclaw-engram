@@ -35,10 +35,13 @@ export async function summarizeText(params: {
   fallback: (text: string, targetTokens: number, mode: SummaryMode) => string;
 }): Promise<string> {
   const runtimeSummary = await summarizeWithRuntime(params);
-  if (runtimeSummary) {
-    return runtimeSummary;
+  if (runtimeSummary?.status === "ok") {
+    return runtimeSummary.summary;
   }
-  return params.fallback(params.text, params.targetTokens, params.mode);
+  const fallbackSummary = params.fallback(params.text, params.targetTokens, params.mode);
+  return runtimeSummary?.status === "fallback"
+    ? formatExtractiveFallbackSummary(fallbackSummary)
+    : fallbackSummary;
 }
 
 async function summarizeWithRuntime(params: {
@@ -47,7 +50,7 @@ async function summarizeWithRuntime(params: {
   targetTokens: number;
   config: EngramConfig;
   runtime?: SubagentRuntime;
-}): Promise<string | null> {
+}): Promise<{ status: "ok"; summary: string } | { status: "fallback" } | null> {
   if (!params.runtime?.subagent) {
     return null;
   }
@@ -68,7 +71,7 @@ async function summarizeWithRuntime(params: {
     const waited = await params.runtime.subagent.waitForRun({ runId: run.runId, timeoutMs: 60_000 });
     if (waited.status !== "ok") {
       warn(params.runtime, `Engram summarizer runtime call failed: ${waited.error ?? waited.status}`);
-      return null;
+      return { status: "fallback" };
     }
     const messages = await params.runtime.subagent.getSessionMessages({ sessionKey, limit: 20 });
     for (let index = messages.messages.length - 1; index >= 0; index -= 1) {
@@ -78,13 +81,13 @@ async function summarizeWithRuntime(params: {
       }
       const text = normalizeContent(message.content).trim();
       if (text) {
-        return text;
+        return { status: "ok", summary: text };
       }
     }
-    return null;
+    return { status: "fallback" };
   } catch (error) {
     warn(params.runtime, `Engram summarizer runtime error: ${error instanceof Error ? error.message : String(error)}`);
-    return null;
+    return { status: "fallback" };
   } finally {
     try {
       await params.runtime.subagent.deleteSession({ sessionKey, deleteTranscript: true });
@@ -131,4 +134,10 @@ function normalizeContent(content: unknown): string {
 
 function warn(runtime: SubagentRuntime, message: string): void {
   runtime.logging?.getChildLogger?.({ plugin: "engram", component: "summarizer" }).warn(message);
+}
+
+function formatExtractiveFallbackSummary(summary: string): string {
+  return summary.trim().length > 0
+    ? `[Summarized — extractive fallback]\n${summary}`
+    : "[Summarized — extractive fallback]";
 }

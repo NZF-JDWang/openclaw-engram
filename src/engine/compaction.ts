@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { retryOnBusy } from "../db/connection.js";
 import { estimateTokens } from "../token-estimate.js";
 import type { SummaryMode } from "./summarizer.js";
 
@@ -134,7 +135,7 @@ async function compactLeafWindow(
   const summaryId = `sum:${randomUUID()}`;
   const firstOrdinal = compactableItems[0]!.ordinal;
 
-  db.exec("BEGIN IMMEDIATE");
+  retryOnBusy(() => db.exec("BEGIN IMMEDIATE"));
   try {
     insertSummary(db, {
       summaryId,
@@ -207,7 +208,7 @@ async function compactSummaryWindow(
   const summaryId = `sum:${randomUUID()}`;
   const firstOrdinal = window[0]!.ordinal;
 
-  db.exec("BEGIN IMMEDIATE");
+  retryOnBusy(() => db.exec("BEGIN IMMEDIATE"));
   try {
     insertSummary(db, {
       summaryId,

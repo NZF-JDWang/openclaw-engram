@@ -43,4 +43,30 @@ describe("summarizeText", () => {
 
     expect(result).toBe('fallback summary');
   });
+
+  it("marks extractive fallback summaries when the runtime fails", async () => {
+    const runtime = {
+      subagent: {
+        run: vi.fn(async () => ({ runId: 'run-1' })),
+        waitForRun: vi.fn(async () => ({ status: 'timeout' as const })),
+        getSessionMessages: vi.fn(async () => ({ messages: [] })),
+        deleteSession: vi.fn(async () => undefined),
+      },
+      logging: {
+        getChildLogger: vi.fn(() => ({ warn: vi.fn() })),
+      },
+    };
+
+    const result = await summarizeText({
+      text: 'long source text',
+      mode: 'leaf',
+      targetTokens: 100,
+      config: resolveEngramConfig({ dbPath: '/tmp/engram.db' }),
+      runtime,
+      fallback: () => 'fallback summary',
+    });
+
+    expect(result).toContain('[Summarized — extractive fallback]');
+    expect(result).toContain('fallback summary');
+  });
 });

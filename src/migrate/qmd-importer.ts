@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import { retryOnBusy } from "../db/connection.js";
 import { chunkDocument } from "../kb/chunker.js";
 import { estimateTokens } from "../token-estimate.js";
 
@@ -63,7 +64,7 @@ export function importFromQmd(sourcePath: string, destDb: DatabaseSync): QmdImpo
       warnings.push("QMD vector rows were intentionally not imported; Engram will require re-indexing for compatible embeddings.");
     }
 
-    destDb.exec("BEGIN IMMEDIATE");
+    retryOnBusy(() => destDb.exec("BEGIN IMMEDIATE"));
     try {
       const insertCollection = destDb.prepare(`
         INSERT OR IGNORE INTO kb_collections (name, path, pattern, description, auto_index, fts5_available, created_at)
