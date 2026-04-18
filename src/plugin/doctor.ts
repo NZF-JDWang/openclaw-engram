@@ -150,12 +150,6 @@ function inspectDatabase(dbPath: string, config: EngramConfig): DoctorCheck[] {
     const ftsRow = db
       .prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'kb_chunks_fts'")
       .get() as { count?: number } | undefined;
-    const pendingFactsRow = db
-      .prepare("SELECT COUNT(*) AS count FROM kb_facts WHERE approval_state = 'pending'")
-      .get() as { count?: number } | undefined;
-    const openConflictsRow = db
-      .prepare("SELECT COUNT(*) AS count FROM kb_conflicts WHERE resolution_state = 'open'")
-      .get() as { count?: number } | undefined;
     const benchmark = runSearchBenchmark(db);
 
     return [
@@ -223,22 +217,6 @@ function inspectDatabase(dbPath: string, config: EngramConfig): DoctorCheck[] {
         key: "kb.searchBenchmark",
         status: benchmark.status,
         message: benchmark.message,
-      },
-      {
-        key: "facts.pending",
-        status: (pendingFactsRow?.count ?? 0) > 0 ? "warn" : "pass",
-        message:
-          (pendingFactsRow?.count ?? 0) > 0
-            ? `There are ${pendingFactsRow?.count ?? 0} pending fact approval(s).`
-            : "No pending fact approvals.",
-      },
-      {
-        key: "facts.conflicts",
-        status: (openConflictsRow?.count ?? 0) > 0 ? "warn" : "pass",
-        message:
-          (openConflictsRow?.count ?? 0) > 0
-            ? `There are ${openConflictsRow?.count ?? 0} open fact conflict(s).`
-            : "No open fact conflicts.",
       },
     ];
   } catch (error) {

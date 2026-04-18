@@ -13,7 +13,6 @@ export const EngramKbCollectionSchema = Type.Object({
 export const EngramConfigSchema = Type.Object({
   enabled: Type.Optional(Type.Boolean()),
   dbPath: Type.Optional(Type.String()),
-  personaPath: Type.Optional(Type.String()),
   exportPath: Type.Optional(Type.String()),
   summarizationProvider: Type.Optional(Type.String()),
   summarizationModel: Type.Optional(Type.String()),
@@ -59,7 +58,6 @@ export const EngramConfigSchema = Type.Object({
 export type EngramConfig = {
   enabled: boolean;
   dbPath: string;
-  personaPath: string;
   exportPath: string;
   summarizationProvider?: string;
   summarizationModel?: string;
@@ -190,11 +188,6 @@ export function defaultDbPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(stateDir || join(homedir(), ".openclaw"), "engram.db");
 }
 
-export function defaultPersonaPath(env: NodeJS.ProcessEnv = process.env): string {
-  const stateDir = env.OPENCLAW_STATE_DIR?.trim();
-  return join(stateDir || join(homedir(), ".openclaw"), "engram-persona.md");
-}
-
 export function defaultExportPath(env: NodeJS.ProcessEnv = process.env): string {
   const stateDir = env.OPENCLAW_STATE_DIR?.trim();
   return join(stateDir || join(homedir(), ".openclaw"), "engram-export.md");
@@ -208,7 +201,6 @@ export function resolveEngramConfig(
   return {
     enabled: pickBoolean(raw, "enabled", DEFAULTS.enabled),
     dbPath: pickString(raw, "dbPath") || defaultDbPath(env),
-    personaPath: pickString(raw, "personaPath") || defaultPersonaPath(env),
     exportPath: pickString(raw, "exportPath") || defaultExportPath(env),
     summarizationProvider: pickString(raw, "summarizationProvider"),
     summarizationModel: pickString(raw, "summarizationModel"),

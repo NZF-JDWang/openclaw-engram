@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { resolveEngramConfig } from "../src/config.js";
 import { openDatabase } from "../src/db/connection.js";
 import { EngramContextEngine } from "../src/engine/engine.js";
-import { readPreviousSessionArtifact } from "../src/engine/session-end.js";
 
 const tempPaths: string[] = [];
 
@@ -41,63 +40,6 @@ describe("EngramContextEngine", () => {
       expect(assembled.messages).toHaveLength(2);
       expect(String((assembled.messages[0] as { content: string }).content)).toContain('<summary id="sum1"');
       expect(String((assembled.messages[1] as { content: string }).content)).toContain('hello');
-    } finally {
-      await engine.dispose();
-    }
-  });
-
-  it("writes a continuity artifact after a turn and injects it into a new session", async () => {
-    const root = mkdtempSync(join(tmpdir(), "engram-engine-continuity-"));
-    tempPaths.push(root);
-    const dbPath = join(root, "engram.db");
-    const database = openDatabase(dbPath);
-    const config = resolveEngramConfig({ dbPath });
-    const engine = new EngramContextEngine(database, config);
-    try {
-      await engine.bootstrap({ sessionId: 'old-session', sessionFile: 'old.jsonl', sessionKey: 'k1' });
-      await engine.afterTurn({
-        sessionId: 'old-session',
-        sessionFile: 'old.jsonl',
-        messages: [
-          { role: 'user', content: 'Finish wiring the migration path.' },
-          { role: 'assistant', content: 'Migration wiring was completed.' },
-        ],
-        prePromptMessageCount: 0,
-      });
-
-      await engine.bootstrap({ sessionId: 'new-session', sessionFile: 'new.jsonl', sessionKey: 'k2' });
-      const assembled = await engine.assemble({ sessionId: 'new-session', messages: [{ role: 'user', content: 'continue' }], tokenBudget: 1000 });
-
-      expect(assembled.systemPromptAddition).toContain('<prior_session>');
-      expect(assembled.systemPromptAddition).toContain('Finish wiring the migration path.');
-    } finally {
-      await engine.dispose();
-    }
-  });
-
-  it("rebuilds the session-end artifact from stored transcript state on session_end", async () => {
-    const root = mkdtempSync(join(tmpdir(), "engram-engine-session-end-"));
-    tempPaths.push(root);
-    const dbPath = join(root, "engram.db");
-    const database = openDatabase(dbPath);
-    const config = resolveEngramConfig({ dbPath });
-    const engine = new EngramContextEngine(database, config);
-    try {
-      await engine.bootstrap({ sessionId: 'ended-session', sessionFile: 'ended.jsonl', sessionKey: 'k1' });
-      await engine.ingest({
-        sessionId: 'ended-session',
-        message: { role: 'user', content: 'Finish the migration wiring.' },
-      });
-      await engine.ingest({
-        sessionId: 'ended-session',
-        message: { role: 'assistant', content: 'We completed the migration wiring and validated it.' },
-      });
-
-      await engine.onSessionEnd({ sessionId: 'ended-session' });
-
-      const artifact = readPreviousSessionArtifact(database.db, 'next-session');
-      expect(artifact?.goal).toContain('Finish the migration wiring.');
-      expect(artifact?.decisions).toContain('completed the migration wiring');
     } finally {
       await engine.dispose();
     }

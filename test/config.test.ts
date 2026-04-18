@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { defaultDbPath, defaultExportPath, defaultPersonaPath, resolveEngramConfig } from "../src/config.js";
+import { defaultDbPath, defaultExportPath, resolveEngramConfig } from "../src/config.js";
 
 describe("resolveEngramConfig", () => {
   it("uses OPENCLAW_STATE_DIR for the default DB path", () => {
@@ -31,9 +31,8 @@ describe("resolveEngramConfig", () => {
     expect(defaultDbPath({} as NodeJS.ProcessEnv)).toContain("engram.db");
   });
 
-  it("derives default persona and export paths from the state dir", () => {
+  it("derives default export path from the state dir", () => {
     const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw" } as NodeJS.ProcessEnv;
-    expect(defaultPersonaPath(env)).toBe(join("/tmp/openclaw", "engram-persona.md"));
     expect(defaultExportPath(env)).toBe(join("/tmp/openclaw", "engram-export.md"));
   });
 
@@ -87,7 +86,6 @@ describe("resolveEngramConfig", () => {
 
   it("maps legacy config aliases onto engram keys", () => {
     const config = resolveEngramConfig({
-      personaFile: "/tmp/persona.md",
       collections: [{ name: "notes", path: "/tmp/notes", pattern: "**/*.txt" }],
       autoIndexOnStart: true,
       indexSessions: false,
@@ -103,7 +101,6 @@ describe("resolveEngramConfig", () => {
       summaryModel: "model-a",
     }, { NODE_ENV: "test" } as NodeJS.ProcessEnv);
 
-    expect(config.personaPath).toBe("/tmp/persona.md");
     expect(config.kbCollections[0]?.name).toBe("notes");
     expect(config.kbAutoIndexOnStart).toBe(true);
     expect(config.kbAutoIndexSessions).toBe(false);

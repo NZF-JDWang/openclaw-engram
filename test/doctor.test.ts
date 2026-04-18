@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveEngramConfig } from "../src/config.js";
 import { openDatabase } from "../src/db/connection.js";
 import { formatDoctorReport, runDoctor } from "../src/plugin/doctor.js";
-import { rememberFact } from "../src/plugin/facts.js";
 
 const tempPaths: string[] = [];
 
@@ -50,24 +49,6 @@ describe("runDoctor", () => {
     expect(formatDoctorReport(report)).toContain("Engram doctor");
   });
 
-  it("warns when pending fact approvals need review", async () => {
-    const root = mkdtempSync(join(tmpdir(), "engram-doctor-pending-"));
-    tempPaths.push(root);
-    const dbPath = join(root, "engram.db");
-    const db = openDatabase(dbPath);
-    db.close();
-
-    const config = resolveEngramConfig({ dbPath });
-    rememberFact(config, {
-      content: "User prefers very terse updates.",
-      memoryClass: "identity",
-      sourceBasis: "agent_inferred",
-    });
-
-    const report = await runDoctor(config);
-
-    expect(report.checks.find((check) => check.key === "facts.pending")?.status).toBe("warn");
-  });
 
   it("surfaces embedding coverage, import runs, and endpoint reachability", async () => {
     const root = mkdtempSync(join(tmpdir(), "engram-doctor-embeds-"));

@@ -3,18 +3,6 @@ import { dirname } from "node:path";
 import type { EngramConfig } from "../config.js";
 import { estimateTokens } from "../token-estimate.js";
 import { searchKnowledgeBase } from "../kb/store.js";
-import { searchApprovedFacts } from "./facts.js";
-import { formatPersonaBlock, readPersona } from "./persona.js";
-
-type RecallFact = {
-  kind: "fact";
-  factId: string;
-  memoryClass: string;
-  sourceKind: string;
-  score: number;
-  content: string;
-  createdAt?: string;
-};
 
 type RecallMemory = {
   kind: "memory";
@@ -26,112 +14,56 @@ type RecallMemory = {
   indexedAt?: string;
 };
 
-export type RecallCandidate =
-  | (RecallFact & { normalizedScore: number; target: "prepend" | "append" })
-  | (RecallMemory & { normalizedScore: number; target: "append" });
-
-type StoredPrependEntry = {
-  factId: string;
-  memoryClass: string;
-  sourceKind: string;
-  score: number;
-  content: string;
-  createdAt?: string;
-  insertedAt: number;
-};
+export type RecallCandidate = RecallMemory & { normalizedScore: number };
 
 export function createBeforePromptBuildHook(config: EngramConfig) {
-  const prependState = new Map<string, StoredPrependEntry[]>();
-
   return async function handleBeforePromptBuild(event: { prompt?: string; messages?: unknown[]; sessionId?: string; conversationId?: string }) {
-    const personaBlock = formatPersonaBlock(readPersona(config));
-    const sessionKey = resolveRecallSessionKey(event);
-
-    let prependRecallBlock = renderStoredPrependBlock(prependState.get(sessionKey) ?? [], event.prompt ?? "");
-    let appendSystemContext: string | undefined;
-
-    if (config.recallEnabled && config.kbEnabled) {
-      const query = extractLatestUserQuery(event);
-      if (estimateSubstance(query) !== 0) {
-        const factHits: RecallFact[] = searchApprovedFacts(config, query, config.recallMaxResults)
-          .filter((fact) => !isDuplicateAgainstRecentContext(fact.content, event.messages ?? []))
-          .map((fact) => ({
-            kind: "fact",
-            factId: fact.factId,
-            memoryClass: fact.memoryClass,
-            sourceKind: fact.sourceKind,
-            score: fact.score,
-            content: fact.content,
-            createdAt: fact.createdAt,
-          }));
-
-        const hits: RecallMemory[] = (await searchKnowledgeBase(config, query, { limit: config.recallMaxResults }))
-          .filter((hit) => hit.score > 0)
-          .map((hit) => ({
-            kind: "memory" as const,
-            chunkId: hit.chunkId,
-            collectionId: hit.collectionName,
-            title: hit.title,
-            score: hit.score,
-            snippet: hit.content,
-            indexedAt: hit.indexedAt,
-          }))
-          .filter((hit) => !isDuplicateAgainstRecentContext(hit.snippet, event.messages ?? []));
-
-        const ranked = rankRecallCandidates(factHits, hits, config);
-        if (shouldInjectRecall(ranked, config)) {
-          const prependFacts = ranked.filter(
-            (candidate): candidate is Extract<RecallCandidate, { kind: "fact" }> =>
-              candidate.kind === "fact" && candidate.target === "prepend",
-          );
-          const appendFacts = ranked.filter(
-            (candidate): candidate is Extract<RecallCandidate, { kind: "fact" }> =>
-              candidate.kind === "fact" && candidate.target === "append",
-          );
-          const appendHits = ranked.filter(
-            (candidate): candidate is Extract<RecallCandidate, { kind: "memory" }> => candidate.kind === "memory",
-          );
-
-          if (prependFacts.length > 0) {
-            const nextEntries = mergePrependEntries(
-              prependState.get(sessionKey) ?? [],
-              prependFacts.map(toFactBlockItem),
-              config.recallPrependMaxTokens,
-            );
-            prependState.set(sessionKey, nextEntries);
-            prependRecallBlock = renderStoredPrependBlock(nextEntries, query);
-          }
-
-          if (appendFacts.length > 0 || appendHits.length > 0) {
-            appendSystemContext = formatRecallBlock(
-              query,
-              appendHits.map(toMemoryBlockItem),
-              config.recallMaxTokens,
-              appendFacts.map(toFactBlockItem),
-            );
-          }
-        }
+    try {
+      if (!(config.recallEnabled && config.kbEnabled)) {
+        return undefined;
       }
-    }
+      const query = extractLatestUserQuery(event);
+      if (estimateSubstance(query) === 0) {
+        return undefined;
+      }
 
-    const prependSystemContext = [personaBlock, prependRecallBlock].filter(Boolean).join("\n");
-    if (config.recallShadowMode && (prependSystemContext || appendSystemContext)) {
-      logShadowRecall(config, {
-        query: extractLatestUserQuery(event),
-        prependSystemContext,
-        appendSystemContext,
-      });
-      return prependSystemContext ? { prependSystemContext: personaBlock || undefined } : undefined;
-    }
+      const hits: RecallMemory[] = (await searchKnowledgeBase(config, query, { limit: config.recallMaxResults }))
+        .filter((hit) => hit.score > 0)
+        .map((hit) => ({
+          kind: "memory" as const,
+          chunkId: hit.chunkId,
+          collectionId: hit.collectionName,
+          title: hit.title,
+          score: hit.score,
+          snippet: hit.content,
+          indexedAt: hit.indexedAt,
+        }))
+        .filter((hit) => !isDuplicateAgainstRecentContext(hit.snippet, event.messages ?? []));
 
-    if (!prependSystemContext && !appendSystemContext) {
+      const ranked = rankRecallCandidates(hits, config);
+      if (!shouldInjectRecall(ranked, config)) {
+        return undefined;
+      }
+
+      const appendSystemContext = formatRecallBlock(
+        query,
+        ranked.map(toMemoryBlockItem),
+        config.recallMaxTokens,
+      );
+      if (!appendSystemContext) {
+        return undefined;
+      }
+
+      if (config.recallShadowMode) {
+        logShadowRecall(config, { query, prependSystemContext: undefined, appendSystemContext });
+        return undefined;
+      }
+
+      return { appendSystemContext };
+    } catch (error) {
+      console.warn(`[engram] before_prompt_build failed: ${error instanceof Error ? error.message : String(error)}`);
       return undefined;
     }
-
-    return {
-      prependSystemContext: prependSystemContext || undefined,
-      appendSystemContext,
-    };
   };
 }
 
@@ -157,27 +89,8 @@ export function formatRecallBlock(
   query: string,
   hits: Array<{ chunkId: string; collectionId: string; title: string; score: number; snippet: string; indexedAt?: string }>,
   maxTokens: number = 300,
-  facts: Array<{ factId: string; memoryClass: string; sourceKind: string; score: number; content: string; createdAt?: string }> = [],
 ): string {
   let remainingTokens = maxTokens;
-  const renderedFacts: string[] = [];
-  for (const fact of facts) {
-    if (remainingTokens <= 0) {
-      break;
-    }
-    const content = truncateToTokens(fact.content, remainingTokens);
-    const contentTokens = estimateTokens(content);
-    if (contentTokens <= 0) {
-      continue;
-    }
-    renderedFacts.push([
-      `  <fact fact_id="${escapeXml(fact.factId)}" memory_class="${escapeXml(fact.memoryClass)}" source_kind="${escapeXml(fact.sourceKind)}" score="${fact.score.toFixed(3)}"${fact.createdAt ? ` date="${escapeXml(fact.createdAt)}"` : ""}>`,
-      `    <content>${escapeXml(content)}</content>`,
-      `  </fact>`,
-    ].join("\n"));
-    remainingTokens -= contentTokens;
-  }
-
   const renderedHits: string[] = [];
   for (const hit of hits) {
     if (remainingTokens <= 0) {
@@ -199,7 +112,6 @@ export function formatRecallBlock(
 
   return [
     `<engram_recall query="${escapeXml(query)}">`,
-    ...renderedFacts,
     ...renderedHits,
     `</engram_recall>`,
   ].join("\n");
@@ -220,32 +132,19 @@ export function estimateSubstance(query: string): 0 | 0.5 | 1 {
 }
 
 export function rankRecallCandidates(
-  facts: RecallFact[],
   hits: RecallMemory[],
   config: Pick<EngramConfig, "recallMaxResults">,
 ): RecallCandidate[] {
-  const rawCandidates: Array<RecallFact | RecallMemory> = [...facts, ...hits];
-  const maxScore = rawCandidates.reduce((currentMax, candidate) => Math.max(currentMax, candidate.score), 0);
+  const maxScore = hits.reduce((currentMax, hit) => Math.max(currentMax, hit.score), 0);
   if (maxScore <= 0) {
     return [];
   }
 
-  return rawCandidates
-    .map((candidate) => {
-      const normalizedScore = Math.max(0, Math.min(1, candidate.score / maxScore));
-      if (candidate.kind === "fact") {
-        return {
-          ...candidate,
-          normalizedScore,
-          target: candidate.memoryClass === "project" ? "prepend" : "append",
-        } satisfies RecallCandidate;
-      }
-      return {
-        ...candidate,
-        normalizedScore,
-        target: "append",
-      } satisfies RecallCandidate;
-    })
+  return hits
+    .map((hit) => ({
+      ...hit,
+      normalizedScore: Math.max(0, Math.min(1, hit.score / maxScore)),
+    }))
     .sort((left, right) => right.normalizedScore - left.normalizedScore || right.score - left.score)
     .slice(0, config.recallMaxResults);
 }
@@ -366,18 +265,7 @@ function truncateToTokens(value: string, maxTokens: number): string {
   return `${collapsed.slice(0, Math.max(maxChars - 3, 0)).trimEnd()}...`;
 }
 
-function toFactBlockItem(fact: RecallFact | Extract<RecallCandidate, { kind: "fact" }>) {
-  return {
-    factId: fact.factId,
-    memoryClass: fact.memoryClass,
-    sourceKind: fact.sourceKind,
-    score: "normalizedScore" in fact ? fact.normalizedScore : fact.score,
-    content: fact.content,
-    createdAt: fact.createdAt,
-  };
-}
-
-function toMemoryBlockItem(hit: RecallMemory | Extract<RecallCandidate, { kind: "memory" }>) {
+function toMemoryBlockItem(hit: RecallMemory | RecallCandidate) {
   return {
     chunkId: hit.chunkId,
     collectionId: hit.collectionId,
@@ -456,41 +344,4 @@ function sentenceOverlap(left: string[], right: string[]): number {
 
 function resolveRecallSessionKey(event: { sessionId?: string; conversationId?: string }): string {
   return event.sessionId?.trim() || event.conversationId?.trim() || "__default";
-}
-
-function mergePrependEntries(
-  existing: StoredPrependEntry[],
-  incoming: Array<{ factId: string; memoryClass: string; sourceKind: string; score: number; content: string; createdAt?: string }>,
-  maxTokens: number,
-): StoredPrependEntry[] {
-  const merged = [...existing];
-  for (const fact of incoming) {
-    const match = merged.find((entry) => entry.factId === fact.factId);
-    if (match) {
-      match.score = fact.score;
-      match.content = fact.content;
-      match.createdAt = fact.createdAt;
-      match.memoryClass = fact.memoryClass;
-      match.sourceKind = fact.sourceKind;
-      continue;
-    }
-    merged.push({ ...fact, insertedAt: Date.now() });
-  }
-
-  let totalTokens = merged.reduce((sum, entry) => sum + estimateTokens(entry.content), 0);
-  while (merged.length > 0 && totalTokens > maxTokens) {
-    const oldestIndex = merged.reduce((bestIndex, entry, index, array) =>
-      entry.insertedAt < array[bestIndex]!.insertedAt ? index : bestIndex, 0);
-    totalTokens -= estimateTokens(merged[oldestIndex]!.content);
-    merged.splice(oldestIndex, 1);
-  }
-
-  return merged;
-}
-
-function renderStoredPrependBlock(entries: StoredPrependEntry[], query: string): string | undefined {
-  if (entries.length === 0) {
-    return undefined;
-  }
-  return formatRecallBlock(query.trim() || "project_recall", [], Number.MAX_SAFE_INTEGER, entries);
 }

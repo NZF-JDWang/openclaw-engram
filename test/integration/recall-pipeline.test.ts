@@ -4,8 +4,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveEngramConfig } from "../../src/config.js";
 import { openDatabase } from "../../src/db/connection.js";
-import { rememberFact } from "../../src/plugin/facts.js";
-import { writePersona } from "../../src/plugin/persona.js";
 import { createBeforePromptBuildHook } from "../../src/plugin/recall.js";
 
 const tempPaths: string[] = [];
@@ -20,11 +18,10 @@ afterEach(() => {
 });
 
 describe("integration recall pipeline", () => {
-  it("injects persona in prepend context and KB recall in append context for a substantive query", async () => {
+  it("injects KB recall in append context for a substantive query", async () => {
     const root = mkdtempSync(join(tmpdir(), "engram-integration-recall-"));
     tempPaths.push(root);
     const dbPath = join(root, "engram.db");
-    const personaPath = join(root, "persona.md");
     const database = openDatabase(dbPath);
     try {
       database.db.exec(`
@@ -39,21 +36,13 @@ describe("integration recall pipeline", () => {
       database.close();
     }
 
-    const config = resolveEngramConfig({ dbPath, personaPath });
-    writePersona(config, 'User prefers concise, factual answers.');
-    rememberFact(config, {
-      content: 'Use sqlite for the Engram store.',
-      memoryClass: 'project',
-      sourceKind: 'decision',
-    });
+    const config = resolveEngramConfig({ dbPath });
 
     const hook = createBeforePromptBuildHook(config);
     const result = await hook({
       messages: [{ role: 'user', content: 'How does configured collection sync work in engram?' }],
     });
 
-    expect(result?.prependSystemContext).toContain('<engram_persona');
-    expect(result?.prependSystemContext).toContain('Use sqlite for the Engram store.');
     expect(result?.appendSystemContext).toContain('<engram_recall');
     expect(result?.appendSystemContext).toContain('Architecture');
     expect(result?.appendSystemContext).toContain('declared glob pattern');

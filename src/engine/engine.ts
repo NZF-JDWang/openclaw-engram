@@ -17,7 +17,6 @@ import { pruneSummarizedConversationsForCurrentConfig } from "../plugin/maintena
 import { estimateTokens } from "../token-estimate.js";
 import { assembleConversationContext } from "./assembler.js";
 import { compactConversation } from "./compaction.js";
-import { formatPriorSessionBlock, readPreviousSessionArtifact, updateSessionEndArtifact } from "./session-end.js";
 import { summarizeText } from "./summarizer.js";
 
 export class EngramContextEngine implements ContextEngine {
@@ -106,7 +105,7 @@ export class EngramContextEngine implements ContextEngine {
       return {
         messages: params.messages as AssembleResult["messages"],
         estimatedTokens: 0,
-        systemPromptAddition: this.buildSystemPromptAddition(params.sessionId),
+        systemPromptAddition: this.buildSystemPromptAddition(),
       };
     }
 
@@ -119,7 +118,7 @@ export class EngramContextEngine implements ContextEngine {
     return {
       messages: assembled.messages as AssembleResult["messages"],
       estimatedTokens: assembled.estimatedTokens,
-      systemPromptAddition: this.buildSystemPromptAddition(params.sessionId),
+      systemPromptAddition: this.buildSystemPromptAddition(),
     };
   }
 
@@ -134,57 +133,39 @@ export class EngramContextEngine implements ContextEngine {
     tokenBudget?: number;
     runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<void> {
-    updateSessionEndArtifact(this.database.db, {
-      conversationId: params.sessionId,
-      messages: params.messages,
-    });
-    const result = await compactConversation(this.database.db, {
-      conversationId: params.sessionId,
-      freshTailCount: this.config.freshTailCount,
-      targetTokens: this.config.leafTargetTokens,
-      condensedTargetTokens: this.config.condensedTargetTokens,
-      incrementalMaxDepth: this.config.compactionMaxDepth ?? this.config.incrementalMaxDepth,
-      summaryQualityThreshold: this.config.summaryQualityThreshold,
-      summarize: (text, targetTokens, mode) =>
-        summarizeText({
-          text,
-          mode,
-          targetTokens,
-          config: this.config,
-          runtime: this.runtime,
-          fallback: (fallbackText, fallbackTargetTokens, fallbackMode) =>
-            fallbackMode === "leaf"
-              ? truncateSummaryText(fallbackText, fallbackTargetTokens)
-              : truncateSummaryText(fallbackText, fallbackTargetTokens),
-        }),
-    });
-    if (this.config.kbEnabled && result.latestSummaryId) {
-      await indexSessionSummaryById(this.database.db, this.config, {
+    try {
+      const result = await compactConversation(this.database.db, {
         conversationId: params.sessionId,
-        summaryId: result.latestSummaryId,
+        freshTailCount: this.config.freshTailCount,
+        targetTokens: this.config.leafTargetTokens,
+        condensedTargetTokens: this.config.condensedTargetTokens,
+        incrementalMaxDepth: this.config.compactionMaxDepth ?? this.config.incrementalMaxDepth,
+        summaryQualityThreshold: this.config.summaryQualityThreshold,
+        summarize: (text, targetTokens, mode) =>
+          summarizeText({
+            text,
+            mode,
+            targetTokens,
+            config: this.config,
+            runtime: this.runtime,
+            fallback: (fallbackText, fallbackTargetTokens, fallbackMode) =>
+              fallbackMode === "leaf"
+                ? truncateSummaryText(fallbackText, fallbackTargetTokens)
+                : truncateSummaryText(fallbackText, fallbackTargetTokens),
+          }),
       });
+      if (this.config.kbEnabled && result.latestSummaryId) {
+        await indexSessionSummaryById(this.database.db, this.config, {
+          conversationId: params.sessionId,
+          summaryId: result.latestSummaryId,
+        });
+      }
+      if (this.config.pruneSummarizedMessages) {
+        pruneSummarizedConversationsForCurrentConfig(this.database.db, this.config, params.sessionId);
+      }
+    } catch (error) {
+      console.warn(`[engram] afterTurn compaction failed: ${error instanceof Error ? error.message : String(error)}`);
     }
-    if (this.config.pruneSummarizedMessages) {
-      pruneSummarizedConversationsForCurrentConfig(this.database.db, this.config, params.sessionId);
-    }
-  }
-
-  async onSessionEnd(params: { sessionId: string }): Promise<void> {
-    const messages = this.database.db.prepare(`
-      SELECT role, content
-      FROM messages
-      WHERE conversation_id = ?
-      ORDER BY seq ASC
-    `).all(params.sessionId) as Array<{ role?: string; content?: unknown }>;
-
-    if (messages.length === 0) {
-      return;
-    }
-
-    updateSessionEndArtifact(this.database.db, {
-      conversationId: params.sessionId,
-      messages,
-    });
   }
 
   async compact(_: { sessionId: string; tokenBudget?: number }): Promise<CompactResult> {
@@ -253,17 +234,8 @@ export class EngramContextEngine implements ContextEngine {
     return (row?.maxOrdinal ?? -1) + 1;
   }
 
-  private buildSystemPromptAddition(conversationId: string): string {
-    const blocks: string[] = [
-      `<engram_status kb_enabled="${this.config.kbEnabled}" recall_enabled="${this.config.recallEnabled}" />`,
-    ];
-    if (this.countMessages(conversationId) === 0) {
-      const artifact = readPreviousSessionArtifact(this.database.db, conversationId);
-      if (artifact) {
-        blocks.push(formatPriorSessionBlock(artifact));
-      }
-    }
-    return blocks.join("\n");
+  private buildSystemPromptAddition(): string {
+    return `<engram_status kb_enabled="${this.config.kbEnabled}" recall_enabled="${this.config.recallEnabled}" />`;
   }
 }
 

@@ -27,9 +27,6 @@ export type EngramStatusSnapshot = {
   kbDocuments: number;
   kbChunks: number;
   kbEmbeddings: number;
-  facts: number;
-  pendingFacts: number;
-  conflicts: number;
   importRuns: number;
   summaryDepthDistribution: SummaryDepthDistribution;
   topConversations: ConversationSizeRow[];
@@ -57,9 +54,6 @@ export function readStatus(config: EngramConfig): EngramStatusSnapshot {
       kbDocuments: 0,
       kbChunks: 0,
       kbEmbeddings: 0,
-      facts: 0,
-      pendingFacts: 0,
-      conflicts: 0,
       importRuns: 0,
       summaryDepthDistribution: { depth0: 0, depth1: 0, depth2: 0, depth3Plus: 0 },
       topConversations: [],
@@ -91,9 +85,6 @@ export function readStatus(config: EngramConfig): EngramStatusSnapshot {
       kbDocuments: count(db, "kb_documents"),
       kbChunks: count(db, "kb_chunks"),
       kbEmbeddings: count(db, "kb_embeddings"),
-      facts: count(db, "kb_facts"),
-      pendingFacts: countWhere(db, "kb_facts", "approval_state = 'pending'"),
-      conflicts: count(db, "kb_conflicts"),
       importRuns: count(db, "engram_import_runs"),
       summaryDepthDistribution: deriveSummaryDepthDistribution(depthRows),
       topConversations: topConversationSizes(db),
@@ -105,13 +96,6 @@ export function readStatus(config: EngramConfig): EngramStatusSnapshot {
 
 function count(db: DatabaseSync, tableName: string): number {
   const row = db.prepare(`SELECT COUNT(*) AS count FROM ${tableName}`).get() as { count?: number } | undefined;
-  return row?.count ?? 0;
-}
-
-function countWhere(db: DatabaseSync, tableName: string, whereClause: string): number {
-  const row = db
-    .prepare(`SELECT COUNT(*) AS count FROM ${tableName} WHERE ${whereClause}`)
-    .get() as { count?: number } | undefined;
   return row?.count ?? 0;
 }
 
@@ -174,9 +158,6 @@ export function formatStatus(snapshot: EngramStatusSnapshot): string {
     `kbDocuments: ${snapshot.kbDocuments}`,
     `kbChunks: ${snapshot.kbChunks}`,
     `kbEmbeddings: ${snapshot.kbEmbeddings}`,
-    `facts: ${snapshot.facts}`,
-    `pendingFacts: ${snapshot.pendingFacts}`,
-    `conflicts: ${snapshot.conflicts}`,
     `importRuns: ${snapshot.importRuns}`,
     ...snapshot.topConversations.map(
       (conversation, index) =>

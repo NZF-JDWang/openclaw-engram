@@ -5,8 +5,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { resolveEngramConfig } from "../../src/config.js";
 import { openDatabase } from "../../src/db/connection.js";
 import { EngramContextEngine } from "../../src/engine/engine.js";
-import { rememberFact } from "../../src/plugin/facts.js";
-import { writePersona } from "../../src/plugin/persona.js";
 import { createBeforePromptBuildHook } from "../../src/plugin/recall.js";
 import { readStatus } from "../../src/plugin/status.js";
 
@@ -22,14 +20,12 @@ afterEach(() => {
 });
 
 describe("integration full session", () => {
-  it("runs compaction, session-summary recall, persona injection, and status reporting in one flow", async () => {
+  it("runs compaction, session-summary recall, and status reporting in one flow", async () => {
     const root = mkdtempSync(join(tmpdir(), "engram-integration-full-session-"));
     tempPaths.push(root);
     const dbPath = join(root, "engram.db");
-    const personaPath = join(root, "persona.md");
     const config = resolveEngramConfig({
       dbPath,
-      personaPath,
       freshTailCount: 4,
       leafTargetTokens: 40,
       condensedTargetTokens: 30,
@@ -61,13 +57,6 @@ describe("integration full session", () => {
     ] as const;
 
     try {
-      writePersona(config, "Answer with concise factual status updates.");
-      rememberFact(config, {
-        content: "Use sqlite for the Engram store.",
-        memoryClass: "project",
-        sourceKind: "decision",
-      });
-
       await engine.bootstrap({ sessionId: "session-full", sessionFile: "session-full.jsonl", sessionKey: "full-key" });
       await engine.ingestBatch({ sessionId: "session-full", sessionKey: "full-key", messages: [...messages] });
       await engine.afterTurn({
@@ -99,9 +88,6 @@ describe("integration full session", () => {
       expect(status.kbCollections).toBeGreaterThan(0);
       expect(status.kbDocuments).toBeGreaterThan(0);
       expect(status.kbChunks).toBeGreaterThan(0);
-      expect(status.facts).toBe(1);
-      expect(recall?.prependSystemContext).toContain("<engram_persona");
-      expect(recall?.prependSystemContext).toContain("Use sqlite for the Engram store.");
       expect(recall?.appendSystemContext).toContain("<engram_recall");
       expect(recall?.appendSystemContext).toContain("qmd chunk metadata");
       expect(recall?.appendSystemContext).toContain("source_kind=\"document_derived\"");

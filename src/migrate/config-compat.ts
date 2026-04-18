@@ -1,5 +1,4 @@
 const LEGACY_KEY_MAPPINGS = [
-  ["personaFile", "personaPath"],
   ["summaryProvider", "summarizationProvider"],
   ["summaryModel", "summarizationModel"],
   ["collections", "kbCollections"],

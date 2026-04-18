@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export const SCHEMA_STATEMENTS = [
   `
@@ -151,49 +151,6 @@ export const SCHEMA_STATEMENTS = [
     exploration_summary TEXT,
     created_at TEXT NOT NULL,
     FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id)
-  )
-  `,
-  `
-  CREATE TABLE IF NOT EXISTS session_end_artifacts (
-    artifact_id TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL,
-    goal TEXT,
-    decisions TEXT,
-    open_questions TEXT,
-    reentry_context TEXT,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id)
-  )
-  `,
-  `
-  CREATE TABLE IF NOT EXISTS kb_facts (
-    fact_id TEXT PRIMARY KEY,
-    content TEXT NOT NULL,
-    memory_class TEXT NOT NULL,
-    source_kind TEXT NOT NULL,
-    source_basis TEXT,
-    scope TEXT NOT NULL DEFAULT 'session',
-    lifecycle_state TEXT NOT NULL,
-    approval_state TEXT NOT NULL,
-    superseded_by TEXT,
-    deprecated_at TEXT,
-    deprecated_reason TEXT,
-    expires_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )
-  `,
-  `
-  CREATE TABLE IF NOT EXISTS kb_conflicts (
-    conflict_id TEXT PRIMARY KEY,
-    fact_id TEXT NOT NULL,
-    conflicting_fact_id TEXT NOT NULL,
-    similarity_score REAL NOT NULL,
-    resolution_state TEXT NOT NULL DEFAULT 'open',
-    created_at TEXT NOT NULL,
-    UNIQUE (fact_id, conflicting_fact_id),
-    FOREIGN KEY (fact_id) REFERENCES kb_facts(fact_id),
-    FOREIGN KEY (conflicting_fact_id) REFERENCES kb_facts(fact_id)
   )
   `,
   `

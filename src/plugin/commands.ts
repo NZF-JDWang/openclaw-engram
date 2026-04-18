@@ -9,17 +9,7 @@ import { getKnowledgeDocument, searchKnowledgeBase } from "../kb/store.js";
 import { formatMigrationReport, runMigration, runMigrationDryRun } from "../migrate/runner.js";
 import { formatDoctorReport, runDoctor } from "./doctor.js";
 import { exportMemories } from "./export.js";
-import {
-  approveFact,
-  forgetFact,
-  formatPendingFacts,
-  listOpenConflicts,
-  listPendingFacts,
-  rejectFact,
-  searchApprovedFacts,
-} from "./facts.js";
 import { formatMaintenanceReport, maintainDatabase, resummarizeLcmSummaries } from "./maintenance.js";
-import { mergePendingFacts, readPersona, writePersona } from "./persona.js";
 import { formatStatus, readStatus } from "./status.js";
 
 export function createEngramCommand(config: EngramConfig): OpenClawPluginCommandDefinition {
@@ -78,18 +68,13 @@ async function handleEngramCommand(
   if (command.startsWith("search ")) {
     const query = rawArgs.slice("search ".length).trim();
     const results = await searchKnowledgeBase(config, query, { limit: 5 });
-    const factResults = searchApprovedFacts(config, query, 5);
     return {
       text:
-        results.length === 0 && factResults.length === 0
+        results.length === 0
           ? `No KB results for: ${query}`
           : [
               `KB search: ${query}`,
               "",
-              ...factResults.map(
-                (fact) =>
-                  `- [fact:${fact.memoryClass}] ${fact.factId} (score ${fact.score}): ${truncate(fact.content)}`,
-              ),
               ...results.map(
                 (result) =>
                   `- [${result.collectionName}] ${result.relPath} (source_kind ${result.sourceKind}, score ${result.score}): ${truncate(result.content)}`,
@@ -137,72 +122,6 @@ async function handleEngramCommand(
     };
   }
 
-  if (command === "review") {
-    return {
-      text: formatPendingFacts(listPendingFacts(config)),
-    };
-  }
-
-  if (command === "conflicts") {
-    const conflicts = listOpenConflicts(config);
-    return {
-      text:
-        conflicts.length === 0
-          ? "No open conflicts."
-          : [
-              "Open conflicts",
-              "",
-              ...conflicts.map(
-                (conflict) =>
-                  `- ${conflict.conflictId} (${conflict.similarityScore.toFixed(2)})\n  A: ${conflict.factContent}\n  B: ${conflict.conflictingContent}`,
-              ),
-            ].join("\n"),
-    };
-  }
-
-  if (command.startsWith("approve ")) {
-    const factId = rawArgs.slice("approve ".length).trim();
-    const fact = approveFact(config, factId);
-    if (fact?.memoryClass === "identity" && fact.approvalState === "approved") {
-      mergePendingFacts(config, [factId]);
-    }
-    return {
-      text: fact ? `Approved fact ${factId}.` : `Fact not found: ${factId}`,
-    };
-  }
-
-  if (command.startsWith("reject ")) {
-    const factId = rawArgs.slice("reject ".length).trim();
-    const fact = rejectFact(config, factId);
-    return {
-      text: fact ? `Rejected fact ${factId}.` : `Fact not found: ${factId}`,
-    };
-  }
-
-  if (command.startsWith("forget ")) {
-    const rest = rawArgs.slice("forget ".length).trim();
-    const [factId, ...reasonParts] = rest.split(/\s+/);
-    const fact = forgetFact(config, factId ?? "", reasonParts.join(" "));
-    return {
-      text: fact ? `Forgot fact ${factId}.` : `Fact not found: ${factId}`,
-    };
-  }
-
-  if (command === "persona") {
-    const persona = readPersona(config);
-    return {
-      text: persona || "No persona set.",
-    };
-  }
-
-  if (command.startsWith("persona set ")) {
-    const content = rawArgs.slice("persona set ".length);
-    writePersona(config, content);
-    return {
-      text: content.trim() ? `Updated persona at ${config.personaPath}.` : `Cleared persona at ${config.personaPath}.`,
-    };
-  }
-
   if (command === "export" || command.startsWith("export ")) {
     const targetPath = command === "export" ? undefined : rawArgs.slice("export ".length).trim();
     const result = exportMemories(config, targetPath);
@@ -245,7 +164,7 @@ async function handleEngramCommand(
       `sessionKey: ${ctx.sessionKey ?? "n/a"}`,
       `kbEnabled: ${config.kbEnabled}`,
       `recallEnabled: ${config.recallEnabled}`,
-      "commands: /engram, /engram doctor, /engram migrate, /engram migrate --dry-run, /engram migrate --resummarize-lcm, /engram search <query>, /engram get <id>, /engram index [path], /engram review, /engram conflicts, /engram approve <factId>, /engram reject <factId>, /engram forget <factId> [reason], /engram persona, /engram persona set <text>, /engram export [path], /engram compact, /engram maintain",
+      "commands: /engram, /engram doctor, /engram migrate, /engram migrate --dry-run, /engram migrate --resummarize-lcm, /engram search <query>, /engram get <id>, /engram index [path], /engram export [path], /engram compact, /engram maintain",
     ].join("\n"),
   };
 }

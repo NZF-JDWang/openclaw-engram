@@ -20,6 +20,10 @@ export function runMigrations(db: DatabaseSync): void {
 }
 
 function ensureFactMetadataColumns(db: DatabaseSync): void {
+  const tableExists = (db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='kb_facts'").get() as { count?: number })?.count ?? 0;
+  if (tableExists === 0) {
+    return;
+  }
   const columns = new Set(
     (db.prepare("PRAGMA table_info(kb_facts)").all() as Array<{ name?: string }>).map(
       (row) => row.name ?? "",

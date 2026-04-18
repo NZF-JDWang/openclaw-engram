@@ -13,7 +13,6 @@ import {
   rankRecallCandidates,
   shouldInjectRecall,
 } from "../src/plugin/recall.js";
-import { rememberFact } from "../src/plugin/facts.js";
 
 const tempPaths: string[] = [];
 
@@ -59,17 +58,8 @@ describe("recall hook", () => {
         score: 0.875,
         snippet: "Importer tracks completed runs.",
       },
-    ], 20, [
-      {
-        factId: "fact-1",
-        memoryClass: "project",
-        sourceKind: "decision",
-        score: 10,
-        content: "Use sqlite for the Engram store.",
-      },
-    ]);
+    ], 200);
     expect(xml).toContain('<engram_recall query="query">');
-    expect(xml).toContain('<fact fact_id="fact-1"');
     expect(xml).toContain('<memory chunk_id="chunk-1"');
     expect(xml).toContain('source_kind="document_derived"');
     expect(xml).toContain('Importer tracks completed runs.');
@@ -90,33 +80,30 @@ describe("recall hook", () => {
     ).toBe(false);
   });
 
-  it("normalizes recall candidates and promotes project facts to prepend tier", () => {
+  it("normalizes recall candidates by score", () => {
     const ranked = rankRecallCandidates(
-      [
-        {
-          kind: "fact",
-          factId: "fact-1",
-          memoryClass: "project",
-          sourceKind: "decision",
-          score: 12,
-          content: "Use sqlite for the Engram store.",
-        },
-      ],
       [
         {
           kind: "memory",
           chunkId: "chunk-1",
           collectionId: "docs",
           title: "Migration Notes",
-          score: 6,
+          score: 12,
           snippet: "Import runs are stored in engram_import_runs.",
+        },
+        {
+          kind: "memory",
+          chunkId: "chunk-2",
+          collectionId: "docs",
+          title: "Other Notes",
+          score: 6,
+          snippet: "Something else.",
         },
       ],
       { recallMaxResults: 3 },
     );
 
     expect(ranked[0]?.normalizedScore).toBe(1);
-    expect(ranked[0]?.target).toBe("prepend");
     expect(ranked[1]?.normalizedScore).toBe(0.5);
   });
 
@@ -161,79 +148,23 @@ describe("recall hook", () => {
     }
   });
 
-  it("injects approved fact recall even when no KB hit exists", async () => {
-    const root = mkdtempSync(join(tmpdir(), "engram-recall-fact-"));
-    tempPaths.push(root);
-    const dbPath = join(root, "engram.db");
-    const database = openDatabase(dbPath);
-    database.close();
-    const config = resolveEngramConfig({ dbPath });
-
-    rememberFact(config, {
-      content: "Use sqlite for the Engram store.",
-      memoryClass: "project",
-      sourceKind: "decision",
-    });
-
-    const hook = createBeforePromptBuildHook(config);
-    const result = await hook({
-      prompt: 'fallback',
-      messages: [{ role: 'user', content: 'Which store did we choose for engram?' }],
-    });
-
-    expect(result?.prependSystemContext).toContain('<fact ');
-    expect(result?.prependSystemContext).toContain('Use sqlite for the Engram store.');
-  });
-
-  it("accumulates project recall in prepend context across turns and evicts oldest entries when capped", async () => {
-    const root = mkdtempSync(join(tmpdir(), "engram-recall-prepend-cap-"));
-    tempPaths.push(root);
-    const dbPath = join(root, "engram.db");
-    const database = openDatabase(dbPath);
-    database.close();
-    const config = resolveEngramConfig({ dbPath, recallPrependMaxTokens: 5, recallMaxResults: 1 });
-
-    rememberFact(config, {
-      content: "Use sqlite.",
-      memoryClass: "project",
-      sourceKind: "decision",
-    });
-    rememberFact(config, {
-      content: "Keep fallback search.",
-      memoryClass: "project",
-      sourceKind: "decision",
-    });
-
-    const hook = createBeforePromptBuildHook(config);
-    const first = await hook({
-      sessionId: "session-1",
-      messages: [{ role: 'user', content: 'Which store should we use?' }],
-    });
-    const second = await hook({
-      sessionId: "session-1",
-      messages: [{ role: 'user', content: 'How should fallback search behave?' }],
-    });
-
-    expect(first?.prependSystemContext).toContain('Use sqlite.');
-    expect(second?.prependSystemContext).toContain('Keep fallback search.');
-    expect(second?.prependSystemContext).not.toContain('Use sqlite.');
-  });
-
   it("logs would-be recall blocks in shadow mode instead of injecting them", async () => {
     const root = mkdtempSync(join(tmpdir(), "engram-recall-shadow-"));
     tempPaths.push(root);
     const dbPath = join(root, "engram.db");
     const shadowLogFile = join(root, "shadow.log");
     const database = openDatabase(dbPath);
-    database.close();
+    try {
+      database.db.exec(`
+        INSERT INTO kb_collections (name, path, pattern, description, auto_index, fts5_available, created_at) VALUES ('docs', '.', '**/*.md', 'Docs', 0, 0, datetime('now'));
+        INSERT INTO kb_documents (doc_id, collection_name, rel_path, title, content_hash, token_count, indexed_at) VALUES ('doc-1', 'docs', 'docs/shadow.md', 'Shadow', 'abc', 12, datetime('now'));
+        INSERT INTO kb_chunks (chunk_id, doc_id, collection_name, ordinal, content, token_count, chunk_hash, derivation_depth) VALUES ('chunk-1', 'doc-1', 'docs', 0, 'Use sqlite for the Engram store in shadow mode recall.', 12, 'chunk-abc', 0);
+      `);
+    } finally {
+      database.close();
+    }
+
     const config = resolveEngramConfig({ dbPath, recallShadowMode: true, recallShadowLogFile: shadowLogFile });
-
-    rememberFact(config, {
-      content: "Use sqlite for the Engram store.",
-      memoryClass: "project",
-      sourceKind: "decision",
-    });
-
     const hook = createBeforePromptBuildHook(config);
     const result = await hook({
       prompt: "fallback",
@@ -241,8 +172,8 @@ describe("recall hook", () => {
     });
 
     expect(result?.appendSystemContext).toBeUndefined();
-    expect(result?.prependSystemContext).toBeUndefined();
+    expect(result).toBeUndefined();
     expect(existsSync(shadowLogFile)).toBe(true);
-    expect(readFileSync(shadowLogFile, "utf8")).toContain("Use sqlite for the Engram store.");
+    expect(readFileSync(shadowLogFile, "utf8")).toContain("Use sqlite for the Engram store in shadow mode recall.");
   });
 });
