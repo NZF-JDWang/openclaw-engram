@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export const SCHEMA_STATEMENTS = [
   `
@@ -52,6 +52,7 @@ export const SCHEMA_STATEMENTS = [
     kind TEXT NOT NULL,
     depth INTEGER NOT NULL DEFAULT 0,
     content TEXT NOT NULL,
+    quality_score INTEGER NOT NULL DEFAULT 0,
     token_count INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id)

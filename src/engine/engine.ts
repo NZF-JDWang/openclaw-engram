@@ -12,6 +12,8 @@ import type {
 import type { EngramConfig } from "../config.js";
 import { retryOnBusy, type EngramDatabase } from "../db/connection.js";
 import { indexSessionSummaryById } from "../kb/indexer.js";
+import { sanitizeStoredContent } from "../lifecycle.js";
+import { pruneSummarizedConversationsForCurrentConfig } from "../plugin/maintenance.js";
 import { estimateTokens } from "../token-estimate.js";
 import { assembleConversationContext } from "./assembler.js";
 import { compactConversation } from "./compaction.js";
@@ -50,7 +52,10 @@ export class EngramContextEngine implements ContextEngine {
     message: { role?: string; content?: unknown };
   }): Promise<IngestResult> {
     const role = typeof params.message.role === "string" ? params.message.role : "unknown";
-    const content = normalizeContent(params.message.content);
+    const content = sanitizeStoredContent(
+      normalizeContent(params.message.content),
+      this.config.maxMessageContentBytes,
+    );
     const messageId = randomUUID();
     const seq = this.nextSequence(params.sessionId);
     const ordinal = this.nextContextOrdinal(params.sessionId);
@@ -138,7 +143,8 @@ export class EngramContextEngine implements ContextEngine {
       freshTailCount: this.config.freshTailCount,
       targetTokens: this.config.leafTargetTokens,
       condensedTargetTokens: this.config.condensedTargetTokens,
-      incrementalMaxDepth: this.config.incrementalMaxDepth,
+      incrementalMaxDepth: this.config.compactionMaxDepth ?? this.config.incrementalMaxDepth,
+      summaryQualityThreshold: this.config.summaryQualityThreshold,
       summarize: (text, targetTokens, mode) =>
         summarizeText({
           text,
@@ -157,6 +163,9 @@ export class EngramContextEngine implements ContextEngine {
         conversationId: params.sessionId,
         summaryId: result.latestSummaryId,
       });
+    }
+    if (this.config.pruneSummarizedMessages) {
+      pruneSummarizedConversationsForCurrentConfig(this.database.db, this.config, params.sessionId);
     }
   }
 
@@ -184,7 +193,8 @@ export class EngramContextEngine implements ContextEngine {
       freshTailCount: this.config.freshTailCount,
       targetTokens: this.config.leafTargetTokens,
       condensedTargetTokens: this.config.condensedTargetTokens,
-      incrementalMaxDepth: this.config.incrementalMaxDepth,
+      incrementalMaxDepth: this.config.compactionMaxDepth ?? this.config.incrementalMaxDepth,
+      summaryQualityThreshold: this.config.summaryQualityThreshold,
       summarize: (text, targetTokens, mode) =>
         summarizeText({
           text,

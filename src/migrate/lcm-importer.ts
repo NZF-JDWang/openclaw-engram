@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { retryOnBusy } from "../db/connection.js";
+import { computeSummaryQualityScore, sanitizeStoredContent, sanitizeSummaryContent } from "../lifecycle.js";
+import { estimateTokens } from "../token-estimate.js";
 
 export type LcmImportResult = {
   imported: boolean;
@@ -132,8 +134,8 @@ export function importFromLcm(sourcePath: string, destDb: DatabaseSync): LcmImpo
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const insertSummary = destDb.prepare(`
-        INSERT OR IGNORE INTO summaries (summary_id, conversation_id, kind, depth, content, token_count, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT OR IGNORE INTO summaries (summary_id, conversation_id, kind, depth, content, quality_score, token_count, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const insertSummaryMessage = destDb.prepare(`
         INSERT OR IGNORE INTO summary_messages (summary_id, message_id, ordinal)
@@ -161,8 +163,8 @@ export function importFromLcm(sourcePath: string, destDb: DatabaseSync): LcmImpo
           mapConversationId(row.conversation_id),
           row.seq,
           row.role,
-          row.content,
-          row.token_count,
+          sanitizeStoredContent(row.content, 32_768),
+          estimateTokens(sanitizeStoredContent(row.content, 32_768)),
           row.created_at,
         );
       }
@@ -173,22 +175,24 @@ export function importFromLcm(sourcePath: string, destDb: DatabaseSync): LcmImpo
           row.session_id,
           row.part_type,
           row.ordinal,
-          row.text_content,
+          row.text_content == null ? null : sanitizeStoredContent(row.text_content, 32_768),
           row.tool_call_id,
           row.tool_name,
-          row.tool_input,
-          row.tool_output,
+          row.tool_input == null ? null : sanitizeStoredContent(row.tool_input, 32_768),
+          row.tool_output == null ? null : sanitizeStoredContent(row.tool_output, 32_768),
           row.metadata,
         );
       }
       for (const row of summaries) {
+        const content = sanitizeSummaryContent(row.content);
         insertSummary.run(
           mapSummaryId(row.conversation_id, row.summary_id),
           mapConversationId(row.conversation_id),
           row.kind,
           row.depth,
-          row.content,
-          row.token_count,
+          content,
+          computeSummaryQualityScore(content, 50),
+          estimateTokens(content),
           row.created_at,
         );
       }

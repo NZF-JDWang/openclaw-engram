@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { retryOnBusy } from "../db/connection.js";
+import {
+  computeSummaryQualityScore,
+  isSummaryEligibleForCompaction,
+  sanitizeSummaryContent,
+} from "../lifecycle.js";
 import { estimateTokens } from "../token-estimate.js";
 import type { SummaryMode } from "./summarizer.js";
 
@@ -42,6 +47,7 @@ type SummaryRow = {
   summary_id: string;
   depth: number;
   content: string;
+  quality_score: number;
   token_count: number;
 };
 
@@ -53,11 +59,19 @@ export async function compactConversation(
     targetTokens: number;
     condensedTargetTokens?: number;
     incrementalMaxDepth?: number;
+    summaryQualityThreshold?: number;
     summarize?: (text: string, targetTokens: number, mode: SummaryMode) => Promise<string>;
   },
 ): Promise<CompactionPipelineOutcome> {
   const tokensBefore = totalContextTokens(db, params.conversationId);
-  const leaf = await compactLeafWindow(db, params.conversationId, params.freshTailCount, params.targetTokens, params.summarize);
+  const leaf = await compactLeafWindow(
+    db,
+    params.conversationId,
+    params.freshTailCount,
+    params.targetTokens,
+    params.summaryQualityThreshold ?? 50,
+    params.summarize,
+  );
   const condensed: CompactionOutcome[] = [];
 
   if (leaf.compacted) {
@@ -69,6 +83,7 @@ export async function compactConversation(
         db,
         params.conversationId,
         params.condensedTargetTokens ?? params.targetTokens,
+        params.summaryQualityThreshold ?? 50,
         params.summarize,
       );
       if (!outcome.compacted) {
@@ -82,6 +97,7 @@ export async function compactConversation(
       db,
       params.conversationId,
       params.condensedTargetTokens ?? params.targetTokens,
+      params.summaryQualityThreshold ?? 50,
       params.summarize,
     );
     if (condensedOnly.compacted) {
@@ -105,6 +121,7 @@ async function compactLeafWindow(
   conversationId: string,
   freshTailCount: number,
   targetTokens: number,
+  summaryQualityThreshold: number,
   summarize?: (text: string, targetTokens: number, mode: SummaryMode) => Promise<string>,
 ): Promise<CompactionOutcome> {
   const items = readContextItems(db, conversationId);
@@ -129,9 +146,10 @@ async function compactLeafWindow(
     .map((item) => getMessage(db, item.message_id!))
     .filter((row): row is MessageRow => row != null);
   const fallbackText = buildMessageSummary(compactableMessages, targetTokens);
-  const summaryText = summarize
+  const generatedText = summarize
     ? await summarize(compactableMessages.map((message) => `${message.role}: ${collapseWhitespace(message.content)}`).join("\n"), targetTokens, "leaf")
     : fallbackText;
+  const summaryText = selectSummaryText(generatedText, fallbackText, summaryQualityThreshold);
   const summaryId = `sum:${randomUUID()}`;
   const firstOrdinal = compactableItems[0]!.ordinal;
 
@@ -143,6 +161,7 @@ async function compactLeafWindow(
       kind: "leaf",
       depth: 0,
       content: summaryText,
+      summaryQualityThreshold,
     });
 
     const linkStmt = db.prepare(`
@@ -180,6 +199,7 @@ async function compactSummaryWindow(
   db: DatabaseSync,
   conversationId: string,
   targetTokens: number,
+  summaryQualityThreshold: number,
   summarize?: (text: string, targetTokens: number, mode: SummaryMode) => Promise<string>,
 ): Promise<CompactionOutcome> {
   const items = readContextItems(db, conversationId);
@@ -197,6 +217,10 @@ async function compactSummaryWindow(
   const summaries = window
     .map((item) => getSummary(db, item.summary_id!))
     .filter((row): row is SummaryRow => row != null);
+  if (summaries.some((summary) => !isSummaryEligibleForCompaction(summary.content, summaryQualityThreshold))) {
+    return { compacted: false, tokensBefore };
+  }
+
   const nextDepth = Math.max(...summaries.map((summary) => summary.depth)) + 1;
   const condensedInput = summaries
     .map(
@@ -204,7 +228,8 @@ async function compactSummaryWindow(
     )
     .join("\n");
   const fallbackText = truncateText(condensedInput, targetTokens);
-  const summaryText = summarize ? await summarize(condensedInput, targetTokens, "condensed") : fallbackText;
+  const generatedText = summarize ? await summarize(condensedInput, targetTokens, "condensed") : fallbackText;
+  const summaryText = selectSummaryText(generatedText, fallbackText, summaryQualityThreshold);
   const summaryId = `sum:${randomUUID()}`;
   const firstOrdinal = window[0]!.ordinal;
 
@@ -216,6 +241,7 @@ async function compactSummaryWindow(
       kind: "condensed",
       depth: nextDepth,
       content: summaryText,
+      summaryQualityThreshold,
     });
 
     const parentStmt = db.prepare(`
@@ -275,18 +301,28 @@ function replaceContextItems(
 
 function insertSummary(
   db: DatabaseSync,
-  params: { summaryId: string; conversationId: string; kind: "leaf" | "condensed"; depth: number; content: string },
+  params: {
+    summaryId: string;
+    conversationId: string;
+    kind: "leaf" | "condensed";
+    depth: number;
+    content: string;
+    summaryQualityThreshold: number;
+  },
 ): void {
+  const content = sanitizeSummaryContent(params.content);
+  const qualityScore = computeSummaryQualityScore(content, params.summaryQualityThreshold);
   db.prepare(`
-    INSERT INTO summaries (summary_id, conversation_id, kind, depth, content, token_count, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+    INSERT INTO summaries (summary_id, conversation_id, kind, depth, content, quality_score, token_count, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
   `).run(
     params.summaryId,
     params.conversationId,
     params.kind,
     params.depth,
-    params.content,
-    estimateTokens(params.content),
+    content,
+    qualityScore,
+    estimateTokens(content),
   );
 }
 
@@ -354,6 +390,7 @@ function getSummary(db: DatabaseSync, summaryId: string): SummaryRow | null {
   return (
     (db.prepare(`
       SELECT summary_id, depth, content, token_count
+      , quality_score
       FROM summaries
       WHERE summary_id = ?
     `).get(summaryId) as SummaryRow | undefined) ?? null
@@ -383,6 +420,17 @@ function sumMessageTokens(db: DatabaseSync, messageIds: string[]): number {
 function buildMessageSummary(messages: MessageRow[], targetTokens: number): string {
   const lines = messages.map((message) => `${message.role}: ${collapseWhitespace(message.content)}`);
   return truncateText(lines.join("\n"), targetTokens);
+}
+
+function selectSummaryText(
+  generatedText: string,
+  fallbackText: string,
+  summaryQualityThreshold: number,
+): string {
+  const sanitizedGenerated = sanitizeSummaryContent(generatedText);
+  return isSummaryEligibleForCompaction(sanitizedGenerated, summaryQualityThreshold)
+    ? sanitizedGenerated
+    : sanitizeSummaryContent(fallbackText);
 }
 
 function truncateText(value: string, targetTokens: number): string {

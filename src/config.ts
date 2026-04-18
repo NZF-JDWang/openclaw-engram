@@ -34,7 +34,13 @@ export const EngramConfigSchema = Type.Object({
   leafTargetTokens: Type.Optional(Type.Integer({ minimum: 100 })),
   condensedTargetTokens: Type.Optional(Type.Integer({ minimum: 100 })),
   incrementalMaxDepth: Type.Optional(Type.Integer({ minimum: -1 })),
+  compactionMaxDepth: Type.Optional(Type.Integer({ minimum: -1 })),
   newSessionRetainDepth: Type.Optional(Type.Integer({ minimum: -1 })),
+  maxMessageContentBytes: Type.Optional(Type.Integer({ minimum: 256 })),
+  pruneSummarizedMessages: Type.Optional(Type.Boolean()),
+  pruneMinAgeDays: Type.Optional(Type.Integer({ minimum: 0 })),
+  dbSizeWarningMb: Type.Optional(Type.Integer({ minimum: 1 })),
+  summaryQualityThreshold: Type.Optional(Type.Integer({ minimum: 1 })),
   kbSearchTimeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
   maxSearchCandidates: Type.Optional(Type.Integer({ minimum: 1 })),
   recallMaxTokens: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -74,7 +80,13 @@ export type EngramConfig = {
   leafTargetTokens: number;
   condensedTargetTokens: number;
   incrementalMaxDepth: number;
+  compactionMaxDepth: number;
   newSessionRetainDepth: number;
+  maxMessageContentBytes: number;
+  pruneSummarizedMessages: boolean;
+  pruneMinAgeDays: number;
+  dbSizeWarningMb: number;
+  summaryQualityThreshold: number;
   kbSearchTimeoutMs: number;
   maxSearchCandidates: number;
   recallMaxTokens: number;
@@ -114,7 +126,13 @@ const DEFAULTS = {
   leafTargetTokens: 2_000,
   condensedTargetTokens: 1_500,
   incrementalMaxDepth: 1,
+  compactionMaxDepth: 3,
   newSessionRetainDepth: -1,
+  maxMessageContentBytes: 32_768,
+  pruneSummarizedMessages: false,
+  pruneMinAgeDays: 90,
+  dbSizeWarningMb: 2_000,
+  summaryQualityThreshold: 50,
   kbSearchTimeoutMs: 150,
   maxSearchCandidates: 50,
   recallMaxTokens: 300,
@@ -223,10 +241,28 @@ export function resolveEngramConfig(
       "incrementalMaxDepth",
       DEFAULTS.incrementalMaxDepth,
     ),
+    compactionMaxDepth: pickNumber(raw, "compactionMaxDepth", DEFAULTS.compactionMaxDepth),
     newSessionRetainDepth: pickNumber(
       raw,
       "newSessionRetainDepth",
       DEFAULTS.newSessionRetainDepth,
+    ),
+    maxMessageContentBytes: pickNumber(
+      raw,
+      "maxMessageContentBytes",
+      DEFAULTS.maxMessageContentBytes,
+    ),
+    pruneSummarizedMessages: pickBoolean(
+      raw,
+      "pruneSummarizedMessages",
+      DEFAULTS.pruneSummarizedMessages,
+    ),
+    pruneMinAgeDays: pickNumber(raw, "pruneMinAgeDays", DEFAULTS.pruneMinAgeDays),
+    dbSizeWarningMb: pickNumber(raw, "dbSizeWarningMb", DEFAULTS.dbSizeWarningMb),
+    summaryQualityThreshold: pickNumber(
+      raw,
+      "summaryQualityThreshold",
+      DEFAULTS.summaryQualityThreshold,
     ),
     kbSearchTimeoutMs: pickNumber(raw, "kbSearchTimeoutMs", DEFAULTS.kbSearchTimeoutMs),
     maxSearchCandidates: pickNumber(raw, "maxSearchCandidates", DEFAULTS.maxSearchCandidates),

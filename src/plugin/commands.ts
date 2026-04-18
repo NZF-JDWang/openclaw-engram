@@ -18,6 +18,7 @@ import {
   rejectFact,
   searchApprovedFacts,
 } from "./facts.js";
+import { formatMaintenanceReport, maintainDatabase, resummarizeLcmSummaries } from "./maintenance.js";
 import { mergePendingFacts, readPersona, writePersona } from "./persona.js";
 import { formatStatus, readStatus } from "./status.js";
 
@@ -42,12 +43,28 @@ async function handleEngramCommand(
     };
   }
 
-  if (command === "migrate" || command === "migrate --dry-run" || command === "migrate --dryrun") {
+  if (
+    command === "migrate"
+    || command === "migrate --dry-run"
+    || command === "migrate --dryrun"
+    || command === "migrate --resummarize-lcm"
+  ) {
     if (command === "migrate") {
       const database = openDatabase(config.dbPath);
       try {
         return {
           text: formatMigrationReport(runMigration(database.db, process.env)),
+        };
+      } finally {
+        database.close();
+      }
+    }
+    if (command === "migrate --resummarize-lcm") {
+      const database = openDatabase(config.dbPath);
+      try {
+        const report = await resummarizeLcmSummaries(database.db, config);
+        return {
+          text: `Re-summarized ${report.updated} imported LCM leaf summary(s) out of ${report.scanned} scanned.`,
         };
       } finally {
         database.close();
@@ -209,6 +226,17 @@ async function handleEngramCommand(
     }
   }
 
+  if (command === "maintain") {
+    const database = openDatabase(config.dbPath);
+    try {
+      return {
+        text: formatMaintenanceReport(maintainDatabase(database.db, config)),
+      };
+    } finally {
+      database.close();
+    }
+  }
+
   return {
     text: [
       formatStatus(readStatus(config)),
@@ -217,7 +245,7 @@ async function handleEngramCommand(
       `sessionKey: ${ctx.sessionKey ?? "n/a"}`,
       `kbEnabled: ${config.kbEnabled}`,
       `recallEnabled: ${config.recallEnabled}`,
-      "commands: /engram, /engram doctor, /engram migrate, /engram migrate --dry-run, /engram search <query>, /engram get <id>, /engram index [path], /engram review, /engram conflicts, /engram approve <factId>, /engram reject <factId>, /engram forget <factId> [reason], /engram persona, /engram persona set <text>, /engram export [path], /engram compact",
+      "commands: /engram, /engram doctor, /engram migrate, /engram migrate --dry-run, /engram migrate --resummarize-lcm, /engram search <query>, /engram get <id>, /engram index [path], /engram review, /engram conflicts, /engram approve <factId>, /engram reject <factId>, /engram forget <factId> [reason], /engram persona, /engram persona set <text>, /engram export [path], /engram compact, /engram maintain",
     ].join("\n"),
   };
 }

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { computeSummaryQualityScore } from "../lifecycle.js";
 import { SCHEMA_STATEMENTS, SCHEMA_VERSION } from "./schema.js";
 
 export function runMigrations(db: DatabaseSync): void {
@@ -7,12 +8,13 @@ export function runMigrations(db: DatabaseSync): void {
   }
 
   ensureFactMetadataColumns(db);
+  ensureSummaryQualityColumn(db);
   ensureKbFtsTable(db);
 
   db.exec(
     `
     INSERT OR IGNORE INTO engram_migrations (version, applied_at, description)
-    VALUES (${SCHEMA_VERSION}, datetime('now'), 'Engram schema bootstrap, durable-fact metadata expansion, and KB FTS support')
+    VALUES (${SCHEMA_VERSION}, datetime('now'), 'Engram schema bootstrap, summary quality tracking, durable-fact metadata expansion, and KB FTS support')
     `,
   );
 }
@@ -65,5 +67,32 @@ function ensureKbFtsTable(db: DatabaseSync): void {
   } catch {
     // Leave existing collection metadata untouched; startup should not rewrite
     // the KB just because FTS5 is unavailable in the current runtime.
+  }
+}
+
+function ensureSummaryQualityColumn(db: DatabaseSync): void {
+  const columns = new Set(
+    (db.prepare("PRAGMA table_info(summaries)").all() as Array<{ name?: string }>).map(
+      (row) => row.name ?? "",
+    ),
+  );
+
+  if (!columns.has("quality_score")) {
+    db.exec("ALTER TABLE summaries ADD COLUMN quality_score INTEGER NOT NULL DEFAULT 0");
+  }
+
+  const rows = db.prepare(`
+    SELECT summary_id, content
+    FROM summaries
+    WHERE COALESCE(quality_score, 0) = 0
+  `).all() as Array<{ summary_id: string; content: string }>;
+
+  const update = db.prepare(`
+    UPDATE summaries
+    SET quality_score = ?
+    WHERE summary_id = ?
+  `);
+  for (const row of rows) {
+    update.run(computeSummaryQualityScore(row.content, 50), row.summary_id);
   }
 }
