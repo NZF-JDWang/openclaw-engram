@@ -18,7 +18,7 @@ It combines:
 |-------|----------|--------------|
 | **Context Engine** | lossless-claw | Persistent transcript storage with DAG-based multi-level compaction |
 | **Knowledge Base** | qmd | Local search over files, directories, and session summaries (BM25 + FTS5 + optional vectors) |
-| **Proactive Recall** | precog | Injects persona, approved facts, and relevant KB results before each prompt build |
+| **Proactive Recall** | precog | Surfaces relevant KB results before each prompt build |
 
 ## Architecture
 
@@ -29,10 +29,9 @@ It combines:
 |  +------------------+  +------------------+  +------------------+  |
 |  |  Context Engine  |  |  Knowledge Base  |  | Recall Injector  |  |
 |  |                  |  |                  |  |                  |  |
-|  |  * messages      |  |  * kb_chunks     |  |  * persona       |  |
-|  |  * summaries     |  |  * kb_docs       |  |  * facts         |  |
-|  |  * context_items |  |  * kb_embeds     |  |  * KB results    |  |
-|  |                  |  |  * kb_facts      |  |                  |  |
+|  |  * messages      |  |  * kb_chunks     |  |  * KB results    |  |
+|  |  * summaries     |  |  * kb_docs       |  |                  |  |
+|  |  * context_items |  |  * kb_embeds     |  |                  |  |
 |  +--------+---------+  +--------+---------+  +--------+---------+  |
 |           |                     |                     |           |
 |           +---------------------+---------------------+           |
@@ -51,7 +50,6 @@ All three layers share a single `engram.db` SQLite database. No subprocesses, no
 - **Persistent transcript storage** — every message, every turn, never lost
 - **DAG-based compaction** — leaf summaries (depth 0) → condensed summaries (depth 1+) → depth 2+, forming a compression hierarchy
 - **Three-level escalation** — normal summarization → aggressive → extractive TF-IDF fallback (always succeeds, no LLM required)
-- **Session continuity** — `session_end_artifacts` carry goals, decisions, and open questions between sessions
 - **Per-session factory** — each session gets its own DB handle, eliminating the "database is not open" singleton crash
 
 ### Knowledge Base
@@ -62,8 +60,6 @@ All three layers share a single `engram.db` SQLite database. No subprocesses, no
 - **Temporal decay** — older documents rank lower by default
 
 ### Proactive Recall
-- **Persona injection** — always-on personality context via `prependSystemContext`
-- **Approved facts** — explicitly stored, reviewed, and injected when relevant
 - **KB recall** — relevant knowledge base chunks surfaced before each model turn
 - **Duplicate suppression** — skips results already present in recent context
 - **Confidence gating** — only injects when scores exceed configurable thresholds
@@ -89,12 +85,6 @@ All three layers share a single `engram.db` SQLite database. No subprocesses, no
 | `/engram migrate --dry-run` | Preview migration without writing |
 | `/engram maintain` | VACUUM, WAL checkpoint, ANALYZE, size warning |
 | `/engram compact` | Force full compaction of current session |
-| `/engram review` | Review pending facts for approval |
-| `/engram conflicts` | Show conflicting facts |
-| `/engram approve <factId>` | Approve a pending fact |
-| `/engram reject <factId>` | Reject a pending fact |
-| `/engram persona` | Read current persona |
-| `/engram persona set <text>` | Set persona text |
 | `/engram export [path]` | Export all memories to markdown |
 | `/engram forget <id> [reason]` | Retire a KB entry |
 
@@ -107,10 +97,7 @@ All three layers share a single `engram.db` SQLite database. No subprocesses, no
 | `engram_get` | Read a document or chunk by path or ID |
 | `engram_index` | Index a file or directory |
 | `engram_export` | Export memories to markdown |
-| `engram_persona` | Read or set the persona file |
-| `engram_remember` | Explicitly store a fact (core/project/note) |
 | `engram_forget` | Deprecate a KB entry with reason and timestamp |
-| `engram_review` | Approve or reject pending facts |
 
 ## Configuration
 
@@ -198,8 +185,7 @@ When `summarizationProvider` and `summarizationModel` are omitted, Engram uses t
 ```
 ~/.openclaw/
 ├── engram.db              # Main SQLite database
-├── engram-persona.md       # Always-injected persona file
-└── engram-export.md        # Markdown export of persona and facts
+└── engram-export.md       # Markdown export of indexed content
 ```
 
 ### Database Schema
@@ -209,8 +195,6 @@ When `summarizationProvider` and `summarizationModel` are omitted, Engram uses t
 | Transcript | `conversations`, `messages`, `message_parts` | Raw conversation storage |
 | Compaction DAG | `summaries`, `summary_messages`, `summary_parents`, `context_items` | Multi-level summary hierarchy |
 | Knowledge Base | `kb_collections`, `kb_documents`, `kb_chunks`, `kb_embeddings` | Indexed documents and chunks |
-| Durable Memory | `kb_facts`, `kb_conflicts` | Approved facts and conflict surfacing |
-| Continuity | `session_end_artifacts` | Goals, decisions, open questions between sessions |
 
 ## Installation
 
@@ -254,7 +238,7 @@ Legacy data is preserved — migration copies, doesn't move. After verifying eve
 ## Performance
 
 - **DB size**: stabilizes at 400-600 MB with proper pruning; configurable warning at 2 GB
-- **Recall latency**: ~100-200ms per turn for KB + fact search
+- **Recall latency**: ~100-200ms per turn for KB search
 - **Compaction**: inline on `afterTurn`, with extractive fallback that always succeeds
 - **Search**: BM25 + FTS5 for lexical, optional vector reranking for semantic
 
