@@ -131,15 +131,17 @@ CREATE TABLE IF NOT EXISTS recall_events (
 
 | # | Feature | Impact | Effort | ROI |
 |---|---------|--------|--------|-----|
-| 1 | Cross-session conversation recall | Very high | Medium | 🔥 |
 | 2 | Recall diversity (1 per source) | High | Low | 🔥 |
+| 5 | Incremental vault sync | High (correctness) | Low-Med | 🔥 |
+| 1 | Cross-session conversation recall | Very high | Medium | 🔥 |
 | 3 | Temporal query filtering | Medium | Low-Med | Good |
-| 4 | Recall feedback loop | High (compounding) | Medium | Good |
-| 5 | Incremental vault sync | Medium | Low-Med | Good |
+| 4 | Recall feedback loop | Medium (infra only) | Medium | Deferred |
 
-**Recommended build order:** 2 → 1 → 3 → 5 → 4
+**Recommended build order:** 2 → 5 → 1 → 3 → 4
 
-Start with diversity (#2) — it's 20 lines and immediately makes the existing 3 recall slots more useful. Then conversation recall (#1) for the biggest quality win. Temporal (#3) and incremental sync (#5) are quality-of-life. Feedback loop (#4) is last because it needs the other recall improvements in place first to have clean signal.
+Start with diversity (#2) — 20 lines, immediately makes recall slots more useful. Then incremental sync (#5) — it's almost a correctness fix; re-indexing the entire vault on every startup can race with the first prompt, and the hash column already exists. Cross-session recall (#1) next for the biggest quality win. Temporal (#3) after that. Feedback loop (#4) last.
+
+**Important note on #4 (Feedback loop):** Build the `recall_events` table and injection tracking infrastructure, but do NOT wire the signal back into ranking yet. Keyword matching on chunk IDs in assistant responses is a noisy proxy — the model uses information without naming it constantly. Hold off on scoring feedback until there's a validated signal quality mechanism.
 
 ---
 
