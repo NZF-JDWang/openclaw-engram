@@ -63,22 +63,7 @@ function ensureKbFtsTable(db: DatabaseSync): void {
       )
     `);
   } catch {
-    db.exec("UPDATE kb_collections SET fts5_available = 0");
-    return;
+    // Leave existing collection metadata untouched; startup should not rewrite
+    // the KB just because FTS5 is unavailable in the current runtime.
   }
-
-  db.exec("DELETE FROM kb_chunks_fts");
-  db.exec(`
-    INSERT INTO kb_chunks_fts (chunk_id, doc_id, collection_name, rel_path, title, content)
-    SELECT
-      kc.chunk_id,
-      kc.doc_id,
-      kc.collection_name,
-      kd.rel_path,
-      kd.title,
-      kc.content
-    FROM kb_chunks kc
-    JOIN kb_documents kd ON kd.doc_id = kc.doc_id
-  `);
-  db.exec("UPDATE kb_collections SET fts5_available = 1");
 }
