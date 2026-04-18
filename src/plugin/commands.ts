@@ -67,13 +67,14 @@ async function handleEngramCommand(
 
   if (command.startsWith("search ")) {
     const query = rawArgs.slice("search ".length).trim();
-    const results = await searchKnowledgeBase(config, query, { limit: 5 });
+    const { query: cleanQuery, since, until } = parseSearchArgs(query);
+    const results = await searchKnowledgeBase(config, cleanQuery, { limit: 5, since, until });
     return {
       text:
         results.length === 0
-          ? `No KB results for: ${query}`
+          ? `No KB results for: ${cleanQuery}`
           : [
-              `KB search: ${query}`,
+              `KB search: ${cleanQuery}${since ? ` (since ${since})` : ""}${until ? ` (until ${until})` : ""}`,
               "",
               ...results.map(
                 (result) =>
@@ -167,6 +168,26 @@ async function handleEngramCommand(
       "commands: /engram, /engram doctor, /engram migrate, /engram migrate --dry-run, /engram migrate --resummarize-lcm, /engram search <query>, /engram get <id>, /engram index [path], /engram export [path], /engram compact, /engram maintain",
     ].join("\n"),
   };
+}
+
+function parseSearchArgs(raw: string): { query: string; since?: string; until?: string } {
+  let remaining = raw;
+  let since: string | undefined;
+  let until: string | undefined;
+
+  const sinceMatch = /--since\s+(\S+)/.exec(remaining);
+  if (sinceMatch) {
+    since = sinceMatch[1];
+    remaining = remaining.replace(sinceMatch[0], "").trim();
+  }
+
+  const untilMatch = /--until\s+(\S+)/.exec(remaining);
+  if (untilMatch) {
+    until = untilMatch[1];
+    remaining = remaining.replace(untilMatch[0], "").trim();
+  }
+
+  return { query: remaining, since, until };
 }
 
 function truncate(value: string, limit: number = 160): string {

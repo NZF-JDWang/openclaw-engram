@@ -10,11 +10,12 @@ export function runMigrations(db: DatabaseSync): void {
   ensureFactMetadataColumns(db);
   ensureSummaryQualityColumn(db);
   ensureKbFtsTable(db);
+  ensureRecallEventsTable(db);
 
   db.exec(
     `
     INSERT OR IGNORE INTO engram_migrations (version, applied_at, description)
-    VALUES (${SCHEMA_VERSION}, datetime('now'), 'Engram schema bootstrap, summary quality tracking, durable-fact metadata expansion, and KB FTS support')
+    VALUES (${SCHEMA_VERSION}, datetime('now'), 'Engram schema bootstrap, summary quality tracking, durable-fact metadata expansion, KB FTS support, and recall feedback infra')
     `,
   );
 }
@@ -72,6 +73,20 @@ function ensureKbFtsTable(db: DatabaseSync): void {
     // Leave existing collection metadata untouched; startup should not rewrite
     // the KB just because FTS5 is unavailable in the current runtime.
   }
+}
+
+function ensureRecallEventsTable(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS recall_events (
+      event_id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      chunk_id TEXT NOT NULL,
+      injected_score REAL NOT NULL,
+      was_referenced INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (chunk_id) REFERENCES kb_chunks(chunk_id) ON DELETE CASCADE
+    )
+  `);
 }
 
 function ensureSummaryQualityColumn(db: DatabaseSync): void {

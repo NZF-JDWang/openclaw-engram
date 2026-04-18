@@ -116,6 +116,7 @@ async function indexResolvedCollection(
     let indexedDocuments = 0;
     let indexedChunks = 0;
     const skippedFiles: string[] = [];
+    const knownRelPaths = new Set<string>();
 
     for (const filePath of files) {
       if (!isIndexableFile(filePath)) {
@@ -131,6 +132,7 @@ async function indexResolvedCollection(
         skippedFiles.push(filePath);
         continue;
       }
+      knownRelPaths.add(relPath);
       if (isDocumentUnchanged(database.db, normalizeCollectionName(params.name), relPath, content)) {
         continue;
       }
@@ -143,6 +145,10 @@ async function indexResolvedCollection(
       await storeEmbeddings(database.db, embeddingClient, config, upserted.chunks);
       indexedDocuments += 1;
       indexedChunks += upserted.chunkCount;
+    }
+
+    if (config.kbIncrementalSync && stats.isDirectory()) {
+      pruneStaleDocuments(database.db, normalizeCollectionName(params.name), knownRelPaths);
     }
 
     return {
@@ -337,8 +343,43 @@ function normalizeRelPath(value: string): string {
   return value.replace(/\\/g, "/");
 }
 
-function isDocumentUnchanged(
+function pruneStaleDocuments(
   db: DatabaseSync,
+  collectionName: string,
+  knownRelPaths: Set<string>,
+): void {
+  const existing = db
+    .prepare(`SELECT doc_id AS docId, rel_path AS relPath FROM kb_documents WHERE collection_name = ?`)
+    .all(collectionName) as Array<{ docId: string; relPath: string }>;
+
+  const stale = existing.filter((row) => !knownRelPaths.has(row.relPath));
+  if (stale.length === 0) {
+    return;
+  }
+
+  const ftsAvailable = hasFtsTable(db);
+  retryOnBusy(() => db.exec("BEGIN IMMEDIATE"));
+  try {
+    for (const row of stale) {
+      db.prepare(`DELETE FROM kb_embeddings WHERE chunk_id IN (SELECT chunk_id FROM kb_chunks WHERE doc_id = ?)`).run(row.docId);
+      if (ftsAvailable) {
+        db.prepare(`DELETE FROM kb_chunks_fts WHERE doc_id = ?`).run(row.docId);
+      }
+      db.prepare(`DELETE FROM kb_chunks WHERE doc_id = ?`).run(row.docId);
+      db.prepare(`DELETE FROM kb_documents WHERE doc_id = ?`).run(row.docId);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // preserve original error
+    }
+    throw error;
+  }
+}
+
+function isDocumentUnchanged(  db: DatabaseSync,
   collectionName: string,
   relPath: string,
   content: string,

@@ -53,6 +53,10 @@ export const EngramConfigSchema = Type.Object({
   recallMinScore: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
   recallGapThreshold: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
   recallHighConfidenceScore: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+  kbIncrementalSync: Type.Optional(Type.Boolean()),
+  recallSessionMaxResults: Type.Optional(Type.Integer({ minimum: 0 })),
+  recallSessionMinScore: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+  recallFeedbackEnabled: Type.Optional(Type.Boolean()),
 });
 
 export type EngramConfig = {
@@ -98,6 +102,10 @@ export type EngramConfig = {
   recallMinScore: number;
   recallGapThreshold: number;
   recallHighConfidenceScore: number;
+  kbIncrementalSync: boolean;
+  recallSessionMaxResults: number;
+  recallSessionMinScore: number;
+  recallFeedbackEnabled: boolean;
 };
 
 export type EngramKbCollection = {
@@ -143,6 +151,10 @@ const DEFAULTS = {
   recallMinScore: 0.4,
   recallGapThreshold: 0.08,
   recallHighConfidenceScore: 0.75,
+  kbIncrementalSync: true,
+  recallSessionMaxResults: 2,
+  recallSessionMinScore: 0.55,
+  recallFeedbackEnabled: false,
 } as const;
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -285,5 +297,9 @@ export function resolveEngramConfig(
       "recallHighConfidenceScore",
       DEFAULTS.recallHighConfidenceScore,
     ),
+    kbIncrementalSync: pickBoolean(raw, "kbIncrementalSync", DEFAULTS.kbIncrementalSync),
+    recallSessionMaxResults: pickNumber(raw, "recallSessionMaxResults", DEFAULTS.recallSessionMaxResults),
+    recallSessionMinScore: pickNumber(raw, "recallSessionMinScore", DEFAULTS.recallSessionMinScore),
+    recallFeedbackEnabled: pickBoolean(raw, "recallFeedbackEnabled", DEFAULTS.recallFeedbackEnabled),
   };
 }

@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 export const SCHEMA_STATEMENTS = [
   `
@@ -161,6 +161,17 @@ export const SCHEMA_STATEMENTS = [
     record_counts_json TEXT NOT NULL,
     imported_at TEXT NOT NULL,
     UNIQUE (source_kind, source_path)
+  )
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS recall_events (
+    event_id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    chunk_id TEXT NOT NULL,
+    injected_score REAL NOT NULL,
+    was_referenced INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (chunk_id) REFERENCES kb_chunks(chunk_id) ON DELETE CASCADE
   )
   `,
 ] as const;

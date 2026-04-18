@@ -50,6 +50,8 @@ export function createEngramSearchTool(config: EngramConfig): AnyAgentTool {
       collections: Type.Optional(Type.Array(Type.String())),
       collection: Type.Optional(Type.String()),
       minScore: Type.Optional(Type.Number({ minimum: 0 })),
+      since: Type.Optional(Type.String({ description: "ISO date string (YYYY-MM-DD). Only return chunks indexed on or after this date." })),
+      until: Type.Optional(Type.String({ description: "ISO date string (YYYY-MM-DD). Only return chunks indexed on or before this date." })),
     }),
     async execute(_toolCallId, input) {
       try {
@@ -60,9 +62,13 @@ export function createEngramSearchTool(config: EngramConfig): AnyAgentTool {
           : [];
         const collection = typeof input.collection === "string" ? input.collection : undefined;
         const minScore = typeof input.minScore === "number" ? input.minScore : 0;
+        const since = typeof input.since === "string" && input.since.trim() ? input.since.trim() : undefined;
+        const until = typeof input.until === "string" && input.until.trim() ? input.until.trim() : undefined;
         const requestedCollections = collections.length > 0 ? collections : collection ? [collection] : [];
         const results = (await searchKnowledgeBase(config, query, {
           limit: requestedCollections.length > 0 ? Math.max(maxResults * 3, maxResults) : maxResults,
+          since,
+          until,
         }))
           .filter((result) => requestedCollections.length === 0 || requestedCollections.includes(result.collectionName))
           .filter((result) => result.score >= minScore)

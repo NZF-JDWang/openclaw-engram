@@ -90,7 +90,7 @@ describe("integration full session", () => {
       expect(status.kbChunks).toBeGreaterThan(0);
       expect(recall?.appendSystemContext).toContain("<engram_recall");
       expect(recall?.appendSystemContext).toContain("qmd chunk metadata");
-      expect(recall?.appendSystemContext).toContain("source_kind=\"document_derived\"");
+      expect(recall?.appendSystemContext).toMatch(/source_kind="(document_derived|session_summary)"/);
     } finally {
       await engine.dispose();
     }

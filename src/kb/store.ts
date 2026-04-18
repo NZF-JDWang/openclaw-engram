@@ -30,7 +30,7 @@ export type KBDocumentRow = {
 export async function searchKnowledgeBase(
   config: EngramConfig,
   query: string,
-  options: { limit?: number; collection?: string } = {},
+  options: { limit?: number; collection?: string; excludeCollections?: string[]; since?: string; until?: string } = {},
 ): Promise<KBSearchRow[]> {
   if (!existsSync(config.dbPath)) {
     return [];
@@ -44,7 +44,12 @@ export async function searchKnowledgeBase(
   const db = new DatabaseSync(config.dbPath, { open: true, readOnly: true });
   const searchStartedAt = Date.now();
   try {
-    const rows = queryLexicalRows(db, tokens, options.collection);
+    const rows = queryLexicalRows(db, tokens, {
+      collection: options.collection,
+      excludeCollections: options.excludeCollections,
+      since: options.since,
+      until: options.until,
+    });
 
     const elapsedAfterLexical = Date.now() - searchStartedAt;
     if (elapsedAfterLexical > config.kbSearchTimeoutMs) {
@@ -120,8 +125,29 @@ export function getKnowledgeDocument(config: EngramConfig, idOrPath: string): KB
   }
 }
 
-export function getKnowledgeDocumentByLocation(
+export function lookupSessionMetadata(
   config: EngramConfig,
+  conversationIds: string[],
+): Map<string, { sessionKey?: string; createdAt: string }> {
+  if (!existsSync(config.dbPath) || conversationIds.length === 0) {
+    return new Map();
+  }
+  const db = new DatabaseSync(config.dbPath, { open: true, readOnly: true });
+  try {
+    const placeholders = conversationIds.map(() => "?").join(", ");
+    const rows = db
+      .prepare(
+        `SELECT conversation_id AS conversationId, session_key AS sessionKey, created_at AS createdAt
+         FROM conversations WHERE conversation_id IN (${placeholders})`,
+      )
+      .all(...conversationIds) as Array<{ conversationId: string; sessionKey?: string; createdAt: string }>;
+    return new Map(rows.map((row) => [row.conversationId, { sessionKey: row.sessionKey, createdAt: row.createdAt }]));
+  } finally {
+    db.close();
+  }
+}
+
+export function getKnowledgeDocumentByLocation(  config: EngramConfig,
   collectionName: string,
   relPath: string,
 ): KBDocumentRow | null {
@@ -158,7 +184,7 @@ export function getKnowledgeDocumentByLocation(
 function queryLexicalRows(
   db: DatabaseSync,
   tokens: string[],
-  collection?: string,
+  options: { collection?: string; excludeCollections?: string[]; since?: string; until?: string },
 ): Array<{
   chunkId: string;
   docId: string;
@@ -169,7 +195,13 @@ function queryLexicalRows(
   indexedAt: string;
   derivationDepth: number;
 }> {
-  const availability = readCollectionAvailability(db, collection);
+  const availability = readCollectionAvailability(db, options.collection);
+  // Apply excludeCollections filter
+  const excluded = new Set(options.excludeCollections ?? []);
+  if (excluded.size > 0) {
+    availability.ftsCollections = availability.ftsCollections.filter((name) => !excluded.has(name));
+    availability.fallbackCollections = availability.fallbackCollections.filter((name) => !excluded.has(name));
+  }
   const rows: Array<{
     chunkId: string;
     docId: string;
@@ -182,7 +214,7 @@ function queryLexicalRows(
   }> = [];
 
   if (hasFtsTable(db) && availability.ftsCollections.length > 0) {
-    rows.push(...queryFtsRows(db, tokens, availability.ftsCollections));
+    rows.push(...queryFtsRows(db, tokens, availability.ftsCollections, options.since, options.until));
   }
 
   if (availability.fallbackCollections.length > 0) {
@@ -194,7 +226,7 @@ function queryLexicalRows(
     warnSearchTimeout(
       `KB FTS5 unavailable; using LIKE fallback for ${availability.fallbackChunkCount} chunk${availability.fallbackChunkCount === 1 ? "" : "s"}.`,
     );
-    rows.push(...queryLikeRows(db, tokens, availability.fallbackCollections));
+    rows.push(...queryLikeRows(db, tokens, availability.fallbackCollections, options.since, options.until));
   }
 
   return rows;
@@ -204,6 +236,8 @@ function queryFtsRows(
   db: DatabaseSync,
   tokens: string[],
   collections: string[],
+  since?: string,
+  until?: string,
 ): Array<{
   chunkId: string;
   docId: string;
@@ -234,6 +268,14 @@ function queryFtsRows(
     sql += ` AND kd.collection_name IN (${collections.map(() => "?").join(", ")})`;
     params.push(...collections);
   }
+  if (since) {
+    sql += ` AND kd.indexed_at >= ?`;
+    params.push(since);
+  }
+  if (until) {
+    sql += ` AND kd.indexed_at <= ?`;
+    params.push(until);
+  }
   sql += ` ORDER BY bm25(kb_chunks_fts), kd.indexed_at DESC, kc.ordinal ASC`;
   return db.prepare(sql).all(...params) as Array<{
     chunkId: string;
@@ -251,6 +293,8 @@ function queryLikeRows(
   db: DatabaseSync,
   tokens: string[],
   collections: string[],
+  since?: string,
+  until?: string,
 ): Array<{
   chunkId: string;
   docId: string;
@@ -280,6 +324,14 @@ function queryLikeRows(
   if (collections.length > 0) {
     sql += ` AND kd.collection_name IN (${collections.map(() => "?").join(", ")})`;
     params.push(...collections);
+  }
+  if (since) {
+    sql += ` AND kd.indexed_at >= ?`;
+    params.push(since);
+  }
+  if (until) {
+    sql += ` AND kd.indexed_at <= ?`;
+    params.push(until);
   }
   sql += ` ORDER BY kd.indexed_at DESC, kc.ordinal ASC`;
   return db.prepare(sql).all(...params) as Array<{

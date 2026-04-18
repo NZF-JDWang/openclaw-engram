@@ -1,17 +1,23 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { EngramConfig } from "../config.js";
+import { openDatabase } from "../db/connection.js";
 import { estimateTokens } from "../token-estimate.js";
-import { searchKnowledgeBase } from "../kb/store.js";
+import { SESSION_COLLECTION_NAME } from "../kb/indexer.js";
+import { lookupSessionMetadata, searchKnowledgeBase } from "../kb/store.js";
 
 type RecallMemory = {
   kind: "memory";
   chunkId: string;
+  docId: string;
   collectionId: string;
+  relPath: string;
   title: string;
   score: number;
   snippet: string;
   indexedAt?: string;
+  sessionKey?: string;
+  sessionCreatedAt?: string;
 };
 
 export type RecallCandidate = RecallMemory & { normalizedScore: number };
@@ -27,12 +33,15 @@ export function createBeforePromptBuildHook(config: EngramConfig) {
         return undefined;
       }
 
-      const hits: RecallMemory[] = (await searchKnowledgeBase(config, query, { limit: config.recallMaxResults }))
+      // Main search (all collections)
+      const mainHits: RecallMemory[] = (await searchKnowledgeBase(config, query, { limit: config.recallMaxResults * 4 }))
         .filter((hit) => hit.score > 0)
         .map((hit) => ({
           kind: "memory" as const,
           chunkId: hit.chunkId,
+          docId: hit.docId,
           collectionId: hit.collectionName,
+          relPath: hit.relPath,
           title: hit.title,
           score: hit.score,
           snippet: hit.content,
@@ -40,14 +49,72 @@ export function createBeforePromptBuildHook(config: EngramConfig) {
         }))
         .filter((hit) => !isDuplicateAgainstRecentContext(hit.snippet, event.messages ?? []));
 
-      const ranked = rankRecallCandidates(hits, config);
-      if (!shouldInjectRecall(ranked, config)) {
+      // Session-only search (separate lane to avoid 0.7 weight penalty)
+      let sessionLaneHits: RecallMemory[] = [];
+      if (config.recallSessionMaxResults > 0) {
+        sessionLaneHits = (await searchKnowledgeBase(config, query, {
+          limit: config.recallSessionMaxResults * 4,
+          collection: SESSION_COLLECTION_NAME,
+        }))
+          .filter((hit) => hit.score > 0)
+          .map((hit) => ({
+            kind: "memory" as const,
+            chunkId: hit.chunkId,
+            docId: hit.docId,
+            collectionId: hit.collectionName,
+            relPath: hit.relPath,
+            title: hit.title,
+            score: hit.score,
+            snippet: hit.content,
+            indexedAt: hit.indexedAt,
+          }))
+          .filter((hit) => !isDuplicateAgainstRecentContext(hit.snippet, event.messages ?? []));
+      }
+
+      // Merge by chunkId — session lane score takes priority for __sessions chunks
+      const mergedMap = new Map<string, RecallMemory>();
+      for (const hit of mainHits) {
+        mergedMap.set(hit.chunkId, hit);
+      }
+      for (const hit of sessionLaneHits) {
+        const existing = mergedMap.get(hit.chunkId);
+        if (!existing || hit.score > existing.score) {
+          mergedMap.set(hit.chunkId, hit);
+        }
+      }
+      const allHits = [...mergedMap.values()];
+
+      // Enrich session hits with conversation metadata
+      if (config.recallSessionMaxResults > 0) {
+        const sessionHitsList = allHits.filter((h) => h.collectionId === SESSION_COLLECTION_NAME);
+        const conversationIds = [...new Set(
+          sessionHitsList.map((h) => h.relPath.split("/")[0]).filter(Boolean),
+        )] as string[];
+        if (conversationIds.length > 0) {
+          const metaMap = lookupSessionMetadata(config, conversationIds);
+          for (const hit of sessionHitsList) {
+            const convId = hit.relPath.split("/")[0];
+            const meta = convId ? metaMap.get(convId) : undefined;
+            if (meta) {
+              hit.sessionKey = meta.sessionKey;
+              hit.sessionCreatedAt = meta.createdAt;
+            }
+          }
+        }
+      }
+
+      // Rank with a wider pool, then apply session budget
+      const ranked = rankRecallCandidates(allHits, config, config.recallMaxResults * 2);
+      const budgeted = applySessionLane(ranked, config);
+      const diversified = diversifyBySource(budgeted, config.recallMaxResults);
+
+      if (!shouldInjectRecall(diversified, config)) {
         return undefined;
       }
 
       const appendSystemContext = formatRecallBlock(
         query,
-        ranked.map(toMemoryBlockItem),
+        diversified.map(toMemoryBlockItem),
         config.recallMaxTokens,
       );
       if (!appendSystemContext) {
@@ -57,6 +124,11 @@ export function createBeforePromptBuildHook(config: EngramConfig) {
       if (config.recallShadowMode) {
         logShadowRecall(config, { query, prependSystemContext: undefined, appendSystemContext });
         return undefined;
+      }
+
+      if (config.recallFeedbackEnabled) {
+        const conversationId = resolveRecallSessionKey(event);
+        logRecallEvents(config, conversationId, diversified);
       }
 
       return { appendSystemContext };
@@ -87,7 +159,7 @@ export function extractLatestUserQuery(event: { prompt?: string; messages?: unkn
 
 export function formatRecallBlock(
   query: string,
-  hits: Array<{ chunkId: string; collectionId: string; title: string; score: number; snippet: string; indexedAt?: string }>,
+  hits: Array<{ chunkId: string; collectionId: string; title: string; score: number; snippet: string; indexedAt?: string; sessionKey?: string; sessionCreatedAt?: string }>,
   maxTokens: number = 300,
 ): string {
   let remainingTokens = maxTokens;
@@ -101,8 +173,12 @@ export function formatRecallBlock(
     if (snippetTokens <= 0) {
       continue;
     }
+    const isSession = hit.collectionId === SESSION_COLLECTION_NAME;
+    const sourceKind = isSession ? "session_summary" : "document_derived";
+    const sessionKeyAttr = hit.sessionKey ? ` session_key="${escapeXml(hit.sessionKey)}"` : "";
+    const sessionDateAttr = hit.sessionCreatedAt ? ` session_date="${escapeXml(hit.sessionCreatedAt)}"` : "";
     renderedHits.push([
-      `  <memory chunk_id="${escapeXml(hit.chunkId)}" collection_id="${escapeXml(hit.collectionId)}" source_kind="document_derived" score="${hit.score.toFixed(3)}"${hit.indexedAt ? ` date="${escapeXml(hit.indexedAt)}"` : ""}>`,
+      `  <memory chunk_id="${escapeXml(hit.chunkId)}" collection_id="${escapeXml(hit.collectionId)}" source_kind="${sourceKind}" score="${hit.score.toFixed(3)}"${hit.indexedAt ? ` date="${escapeXml(hit.indexedAt)}"` : ""}${sessionKeyAttr}${sessionDateAttr}>`,
       `    <title>${escapeXml(hit.title)}</title>`,
       `    <snippet>${escapeXml(snippet)}</snippet>`,
       `  </memory>`,
@@ -134,19 +210,81 @@ export function estimateSubstance(query: string): 0 | 0.5 | 1 {
 export function rankRecallCandidates(
   hits: RecallMemory[],
   config: Pick<EngramConfig, "recallMaxResults">,
+  limitOverride?: number,
 ): RecallCandidate[] {
   const maxScore = hits.reduce((currentMax, hit) => Math.max(currentMax, hit.score), 0);
   if (maxScore <= 0) {
     return [];
   }
 
+  const limit = limitOverride ?? config.recallMaxResults;
   return hits
     .map((hit) => ({
       ...hit,
       normalizedScore: Math.max(0, Math.min(1, hit.score / maxScore)),
     }))
     .sort((left, right) => right.normalizedScore - left.normalizedScore || right.score - left.score)
-    .slice(0, config.recallMaxResults);
+    .slice(0, limit);
+}
+
+function applySessionLane(
+  ranked: RecallCandidate[],
+  config: Pick<EngramConfig, "recallMaxResults" | "recallSessionMaxResults" | "recallSessionMinScore">,
+): RecallCandidate[] {
+  const sessionHits = ranked
+    .filter((h) => h.collectionId === SESSION_COLLECTION_NAME && h.normalizedScore >= config.recallSessionMinScore)
+    .slice(0, config.recallSessionMaxResults);
+  const mainHits = ranked.filter((h) => h.collectionId !== SESSION_COLLECTION_NAME);
+  const slotsForMain = Math.max(0, config.recallMaxResults - sessionHits.length);
+  return [...sessionHits, ...mainHits.slice(0, slotsForMain)]
+    .sort((a, b) => b.normalizedScore - a.normalizedScore || b.score - a.score);
+}
+
+function diversifyBySource(candidates: RecallCandidate[], maxResults: number): RecallCandidate[] {
+  const seenDocIds = new Set<string>();
+  const diverse: RecallCandidate[] = [];
+  const overflow: RecallCandidate[] = [];
+
+  for (const candidate of candidates) {
+    if (!seenDocIds.has(candidate.docId)) {
+      seenDocIds.add(candidate.docId);
+      diverse.push(candidate);
+    } else {
+      overflow.push(candidate);
+    }
+  }
+
+  // Relax deduplication if not enough unique sources
+  for (const candidate of overflow) {
+    if (diverse.length >= maxResults) break;
+    diverse.push(candidate);
+  }
+
+  return diverse.slice(0, maxResults);
+}
+
+function logRecallEvents(config: EngramConfig, conversationId: string, candidates: RecallCandidate[]): void {
+  try {
+    const database = openDatabase(config.dbPath);
+    try {
+      const insert = database.db.prepare(
+        `INSERT OR IGNORE INTO recall_events (event_id, conversation_id, chunk_id, injected_score, created_at)
+         VALUES (?, ?, ?, ?, datetime('now'))`,
+      );
+      for (const candidate of candidates) {
+        insert.run(
+          `re:${candidate.chunkId}:${Date.now()}`,
+          conversationId,
+          candidate.chunkId,
+          candidate.normalizedScore,
+        );
+      }
+    } finally {
+      database.close();
+    }
+  } catch (error) {
+    console.warn(`[engram] Failed to log recall events: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 export function shouldInjectRecall(
@@ -273,6 +411,8 @@ function toMemoryBlockItem(hit: RecallMemory | RecallCandidate) {
     score: "normalizedScore" in hit ? hit.normalizedScore : hit.score,
     snippet: hit.snippet,
     indexedAt: hit.indexedAt,
+    sessionKey: hit.sessionKey,
+    sessionCreatedAt: hit.sessionCreatedAt,
   };
 }
 

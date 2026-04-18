@@ -86,7 +86,9 @@ describe("recall hook", () => {
         {
           kind: "memory",
           chunkId: "chunk-1",
+          docId: "doc-1",
           collectionId: "docs",
+          relPath: "notes/migration.md",
           title: "Migration Notes",
           score: 12,
           snippet: "Import runs are stored in engram_import_runs.",
@@ -94,7 +96,9 @@ describe("recall hook", () => {
         {
           kind: "memory",
           chunkId: "chunk-2",
+          docId: "doc-2",
           collectionId: "docs",
+          relPath: "notes/other.md",
           title: "Other Notes",
           score: 6,
           snippet: "Something else.",
