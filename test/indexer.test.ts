@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveEngramConfig } from "../src/config.js";
 import { openDatabase } from "../src/db/connection.js";
 import { EngramContextEngine } from "../src/engine/engine.js";
-import { indexPath, indexSessionSummaryById, SESSION_COLLECTION_NAME, syncConfiguredCollections } from "../src/kb/indexer.js";
+import { dropKbCollection, indexAllSummariesIntoKB, indexPath, indexSessionSummaryById, SESSION_COLLECTION_NAME, syncConfiguredCollections } from "../src/kb/indexer.js";
 import { searchKnowledgeBase } from "../src/kb/store.js";
 
 const tempPaths: string[] = [];
@@ -204,6 +204,72 @@ describe("kb indexer", () => {
 
       expect(result).toBeNull();
       expect(chunkCount).toBe(0);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("indexAllSummariesIntoKB bulk-indexes depth-0 summaries that are not yet in __sessions", async () => {
+    const root = mkdtempSync(join(tmpdir(), "engram-indexer-bulk-"));
+    tempPaths.push(root);
+    const dbPath = join(root, "engram.db");
+    const database = openDatabase(dbPath);
+    try {
+      database.db.exec(`
+        INSERT INTO conversations (conversation_id, session_id, session_key, created_at)
+        VALUES ('conv-lcm1', 'conv-lcm1', 'lcm-key', datetime('now')),
+               ('conv-lcm2', 'conv-lcm2', 'lcm-key2', datetime('now'));
+        INSERT INTO summaries (summary_id, conversation_id, kind, depth, content, quality_score, token_count, created_at)
+        VALUES
+          ('lcm:sum-a', 'conv-lcm1', 'leaf', 0, 'We discussed idempotent migration tracking for repeated imports.', 60, 10, datetime('now')),
+          ('lcm:sum-b', 'conv-lcm2', 'leaf', 0, 'We decided to preserve chunk metadata across all qmd import passes.', 60, 10, datetime('now')),
+          ('lcm:sum-deep', 'conv-lcm1', 'condensed', 1, 'Condensed summary should be skipped.', 60, 10, datetime('now'));
+      `);
+
+      const config = resolveEngramConfig({ dbPath });
+      const report = await indexAllSummariesIntoKB(database.db, config);
+
+      expect(report.scanned).toBe(2);
+      expect(report.indexed).toBe(2);
+      expect(report.skipped).toBe(0);
+
+      const hits = await searchKnowledgeBase(config, "idempotent migration tracking", { limit: 5 });
+      expect(hits.some((h) => h.collectionName === SESSION_COLLECTION_NAME)).toBe(true);
+
+      // Running again should skip all (idempotent)
+      const report2 = await indexAllSummariesIntoKB(database.db, config);
+      expect(report2.indexed).toBe(0);
+      expect(report2.skipped).toBe(2);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("dropKbCollection removes all docs, chunks, embeddings, and the collection entry", async () => {
+    const root = mkdtempSync(join(tmpdir(), "engram-indexer-drop-"));
+    tempPaths.push(root);
+    const docsDir = join(root, "sessions-raw");
+    mkdirSync(docsDir);
+    writeFileSync(join(docsDir, "dump.md"), "# Raw dump\n\nRaw conversation dump content here.", "utf8");
+
+    const dbPath = join(root, "engram.db");
+    const config = resolveEngramConfig({ dbPath });
+    await indexPath(config, docsDir, "sessions");
+
+    const database = openDatabase(dbPath);
+    try {
+      const before = (database.db.prepare("SELECT COUNT(*) AS n FROM kb_chunks WHERE collection_name = 'sessions'").get() as { n: number }).n;
+      expect(before).toBeGreaterThan(0);
+
+      const result = dropKbCollection(database.db, "sessions");
+
+      expect(result.droppedDocs).toBe(1);
+      expect(result.droppedChunks).toBeGreaterThan(0);
+
+      const after = (database.db.prepare("SELECT COUNT(*) AS n FROM kb_chunks WHERE collection_name = 'sessions'").get() as { n: number }).n;
+      const collectionGone = (database.db.prepare("SELECT COUNT(*) AS n FROM kb_collections WHERE name = 'sessions'").get() as { n: number }).n;
+      expect(after).toBe(0);
+      expect(collectionGone).toBe(0);
     } finally {
       database.close();
     }

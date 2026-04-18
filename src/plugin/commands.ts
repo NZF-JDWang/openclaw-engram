@@ -4,7 +4,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { EngramConfig } from "../config.js";
 import { openDatabase } from "../db/connection.js";
-import { indexPath, syncConfiguredCollections } from "../kb/indexer.js";
+import { dropKbCollection, indexAllSummariesIntoKB, indexPath, syncConfiguredCollections } from "../kb/indexer.js";
 import { getKnowledgeDocument, searchKnowledgeBase } from "../kb/store.js";
 import { formatMigrationReport, runMigration, runMigrationDryRun } from "../migrate/runner.js";
 import { formatDoctorReport, runDoctor } from "./doctor.js";
@@ -38,6 +38,8 @@ async function handleEngramCommand(
     || command === "migrate --dry-run"
     || command === "migrate --dryrun"
     || command === "migrate --resummarize-lcm"
+    || command === "migrate --index-summaries"
+    || command === "migrate --drop-sessions"
   ) {
     if (command === "migrate") {
       const database = openDatabase(config.dbPath);
@@ -55,6 +57,28 @@ async function handleEngramCommand(
         const report = await resummarizeLcmSummaries(database.db, config);
         return {
           text: `Re-summarized ${report.updated} imported LCM leaf summary(s) out of ${report.scanned} scanned.`,
+        };
+      } finally {
+        database.close();
+      }
+    }
+    if (command === "migrate --index-summaries") {
+      const database = openDatabase(config.dbPath);
+      try {
+        const report = await indexAllSummariesIntoKB(database.db, config);
+        return {
+          text: `Indexed summaries into __sessions KB: ${report.indexed} indexed, ${report.skipped} skipped (already indexed or empty), ${report.scanned} scanned.`,
+        };
+      } finally {
+        database.close();
+      }
+    }
+    if (command === "migrate --drop-sessions") {
+      const database = openDatabase(config.dbPath);
+      try {
+        const result = dropKbCollection(database.db, "sessions");
+        return {
+          text: `Dropped [sessions] collection: ${result.droppedDocs} doc(s), ${result.droppedChunks} chunk(s) removed.`,
         };
       } finally {
         database.close();
@@ -165,7 +189,7 @@ async function handleEngramCommand(
       `sessionKey: ${ctx.sessionKey ?? "n/a"}`,
       `kbEnabled: ${config.kbEnabled}`,
       `recallEnabled: ${config.recallEnabled}`,
-      "commands: /engram, /engram doctor, /engram migrate, /engram migrate --dry-run, /engram migrate --resummarize-lcm, /engram search <query>, /engram get <id>, /engram index [path], /engram export [path], /engram compact, /engram maintain",
+      "commands: /engram, /engram doctor, /engram migrate, /engram migrate --dry-run, /engram migrate --resummarize-lcm, /engram migrate --index-summaries, /engram migrate --drop-sessions, /engram search <query>, /engram get <id>, /engram index [path], /engram export [path], /engram compact, /engram maintain",
     ].join("\n"),
   };
 }

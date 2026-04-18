@@ -207,6 +207,107 @@ export async function indexSessionSummaryById(
   };
 }
 
+export type IndexAllSummariesResult = {
+  scanned: number;
+  indexed: number;
+  skipped: number;
+};
+
+export async function indexAllSummariesIntoKB(
+  db: DatabaseSync,
+  config: EngramConfig,
+): Promise<IndexAllSummariesResult> {
+  ensureCollection(db, {
+    name: SESSION_COLLECTION_NAME,
+    path: "engram://sessions",
+    pattern: "*.summary",
+    description: "Compacted Engram session summaries",
+    autoIndex: true,
+  });
+
+  const summaries = db.prepare(`
+    SELECT s.summary_id, s.conversation_id, s.content, s.depth
+    FROM summaries s
+    WHERE s.depth = 0
+    ORDER BY s.created_at ASC
+  `).all() as Array<{ summary_id: string; conversation_id: string; content: string; depth: number }>;
+
+  const embeddingClient = new EmbeddingClient(config);
+  let indexed = 0;
+  let skipped = 0;
+
+  for (const summary of summaries) {
+    if (!summary.content) {
+      skipped += 1;
+      continue;
+    }
+
+    const docId = `summary:${summary.summary_id}`;
+    const existing = db.prepare(`SELECT doc_id FROM kb_documents WHERE doc_id = ? LIMIT 1`).get(docId) as
+      | { doc_id: string }
+      | undefined;
+    if (existing) {
+      skipped += 1;
+      continue;
+    }
+
+    const upserted = upsertDocument(db, {
+      collectionName: SESSION_COLLECTION_NAME,
+      relPath: `${summary.conversation_id}/${summary.summary_id}.summary`,
+      title: `Session summary ${summary.summary_id}`,
+      content: summary.content,
+      docId,
+      derivationDepth: 1,
+    });
+    await storeEmbeddings(db, embeddingClient, config, upserted.chunks);
+    indexed += 1;
+  }
+
+  return { scanned: summaries.length, indexed, skipped };
+}
+
+export type DropCollectionResult = {
+  collectionName: string;
+  droppedDocs: number;
+  droppedChunks: number;
+};
+
+export function dropKbCollection(db: DatabaseSync, collectionName: string): DropCollectionResult {
+  const ftsAvailable = hasFtsTable(db);
+
+  const docCount = (db.prepare(`SELECT COUNT(*) AS n FROM kb_documents WHERE collection_name = ?`).get(collectionName) as { n: number } | undefined)?.n ?? 0;
+  const chunkCount = (db.prepare(`SELECT COUNT(*) AS n FROM kb_chunks WHERE collection_name = ?`).get(collectionName) as { n: number } | undefined)?.n ?? 0;
+
+  if (docCount === 0 && chunkCount === 0) {
+    db.prepare(`DELETE FROM kb_collections WHERE name = ?`).run(collectionName);
+    return { collectionName, droppedDocs: 0, droppedChunks: 0 };
+  }
+
+  retryOnBusy(() => db.exec("BEGIN IMMEDIATE"));
+  try {
+    db.prepare(`
+      DELETE FROM kb_embeddings
+      WHERE chunk_id IN (SELECT chunk_id FROM kb_chunks WHERE collection_name = ?)
+    `).run(collectionName);
+    if (ftsAvailable) {
+      db.prepare(`DELETE FROM kb_chunks_fts WHERE collection_name = ?`).run(collectionName);
+    }
+    db.prepare(`DELETE FROM kb_chunks WHERE collection_name = ?`).run(collectionName);
+    db.prepare(`DELETE FROM kb_documents WHERE collection_name = ?`).run(collectionName);
+    db.prepare(`DELETE FROM kb_collections WHERE name = ?`).run(collectionName);
+    db.exec("COMMIT");
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // preserve original error
+    }
+    throw error;
+  }
+
+  return { collectionName, droppedDocs: docCount, droppedChunks: chunkCount };
+}
+
 function upsertDocument(
   db: DatabaseSync,
   params: {
