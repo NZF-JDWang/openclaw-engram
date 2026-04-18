@@ -5,6 +5,7 @@ import { indexPath } from "../kb/indexer.js";
 import { getKnowledgeDocument, searchKnowledgeBase } from "../kb/store.js";
 import { exportMemories } from "./export.js";
 import { approveFact, forgetFact, rejectFact, rememberFact, searchApprovedFacts } from "./facts.js";
+import { createEngramMemorySearchManager } from "./memory-runtime.js";
 import { mergePendingFacts, readPersona, writePersona } from "./persona.js";
 import { formatStatus, readStatus } from "./status.js";
 
@@ -195,6 +196,88 @@ export function createEngramGetTool(config: EngramConfig): AnyAgentTool {
           },
         ],
         details: { id, document },
+      };
+    },
+  };
+}
+
+export function createEngramMemorySearchTool(config: EngramConfig): AnyAgentTool {
+  const manager = createEngramMemorySearchManager(config);
+  return {
+    name: "memory_search",
+    label: "Memory Search",
+    description: "Search Engram knowledge-base content through the standard OpenClaw memory search interface",
+    parameters: Type.Object({
+      query: Type.String(),
+      maxResults: Type.Optional(Type.Number({ minimum: 1, maximum: 20 })),
+      minScore: Type.Optional(Type.Number({ minimum: 0 })),
+      corpus: Type.Optional(
+        Type.Union([Type.Literal("memory"), Type.Literal("all"), Type.Literal("wiki")]),
+      ),
+    }),
+    async execute(_toolCallId, input) {
+      if (input.corpus === "wiki") {
+        return {
+          content: [{ type: "text", text: "Engram does not provide wiki corpus results." }],
+          details: { results: [] },
+        };
+      }
+
+      const results = await manager.search(String(input.query ?? "").trim(), {
+        maxResults: typeof input.maxResults === "number" ? input.maxResults : 5,
+        minScore: typeof input.minScore === "number" ? input.minScore : undefined,
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              results.length === 0
+                ? "No matching memories found."
+                : results
+                    .map(
+                      (result) =>
+                        `${result.path}#L${result.startLine}-${result.endLine} (score ${result.score})\n${truncate(result.snippet, 240)}`,
+                    )
+                    .join("\n\n"),
+          },
+        ],
+        details: { results },
+      };
+    },
+  };
+}
+
+export function createEngramMemoryGetTool(config: EngramConfig): AnyAgentTool {
+  const manager = createEngramMemorySearchManager(config);
+  return {
+    name: "memory_get",
+    label: "Memory Get",
+    description: "Read Engram knowledge-base content through the standard OpenClaw memory get interface",
+    parameters: Type.Object({
+      path: Type.String(),
+      from: Type.Optional(Type.Number({ minimum: 1 })),
+      lines: Type.Optional(Type.Number({ minimum: 1 })),
+      corpus: Type.Optional(
+        Type.Union([Type.Literal("memory"), Type.Literal("all"), Type.Literal("wiki")]),
+      ),
+    }),
+    async execute(_toolCallId, input) {
+      if (input.corpus === "wiki") {
+        return {
+          content: [{ type: "text", text: "" }],
+          details: { path: input.path, text: "", disabled: true, error: "wiki corpus is unavailable in Engram" },
+        };
+      }
+
+      const result = await manager.readFile({
+        relPath: String(input.path ?? "").trim(),
+        from: typeof input.from === "number" ? input.from : undefined,
+        lines: typeof input.lines === "number" ? input.lines : undefined,
+      });
+      return {
+        content: [{ type: "text", text: result.text }],
+        details: result,
       };
     },
   };

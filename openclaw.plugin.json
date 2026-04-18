@@ -1,6 +1,216 @@
 {
   "id": "engram",
   "kind": "context-engine",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean"
+      },
+      "dbPath": {
+        "type": "string"
+      },
+      "personaPath": {
+        "type": "string"
+      },
+      "exportPath": {
+        "type": "string"
+      },
+      "summarizationProvider": {
+        "type": "string"
+      },
+      "summarizationModel": {
+        "type": "string"
+      },
+      "kbEnabled": {
+        "type": "boolean"
+      },
+      "kbCollections": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "path", "pattern"],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "pattern": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "kbAutoIndexSessions": {
+        "type": "boolean"
+      },
+      "kbSessionIndexCircuitBreaker": {
+        "type": "boolean"
+      },
+      "kbAutoIndexOnStart": {
+        "type": "boolean"
+      },
+      "recallEnabled": {
+        "type": "boolean"
+      },
+      "embedEnabled": {
+        "type": "boolean"
+      },
+      "embedApiUrl": {
+        "type": "string"
+      },
+      "embedApiModel": {
+        "type": "string"
+      },
+      "embedApiKey": {
+        "type": "string"
+      },
+      "embedBatchSize": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "contextThreshold": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "freshTailCount": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "leafChunkTokens": {
+        "type": "integer",
+        "minimum": 1000
+      },
+      "leafTargetTokens": {
+        "type": "integer",
+        "minimum": 100
+      },
+      "condensedTargetTokens": {
+        "type": "integer",
+        "minimum": 100
+      },
+      "incrementalMaxDepth": {
+        "type": "integer",
+        "minimum": -1
+      },
+      "newSessionRetainDepth": {
+        "type": "integer",
+        "minimum": -1
+      },
+      "kbSearchTimeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "maxSearchCandidates": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "recallMaxTokens": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "recallMaxResults": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "recallPrependMaxTokens": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "recallShadowMode": {
+        "type": "boolean"
+      },
+      "recallShadowLogFile": {
+        "type": "string"
+      },
+      "recallKeywordBypassMinLength": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "recallKeywordBypassMaxTerms": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "recallRrfK": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "recallMinScore": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "recallGapThreshold": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "recallHighConfidenceScore": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "personaFile": {
+        "type": "string"
+      },
+      "summaryProvider": {
+        "type": "string"
+      },
+      "summaryModel": {
+        "type": "string"
+      },
+      "collections": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        }
+      },
+      "autoIndexOnStart": {
+        "type": "boolean"
+      },
+      "indexSessions": {
+        "type": "boolean"
+      },
+      "sessionIndexCircuitBreaker": {
+        "type": "boolean"
+      },
+      "searchTimeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "searchCandidates": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "embeddingEnabled": {
+        "type": "boolean"
+      },
+      "embeddingApiUrl": {
+        "type": "string"
+      },
+      "embeddingModel": {
+        "type": "string"
+      },
+      "embeddingApiKey": {
+        "type": "string"
+      },
+      "embeddingBatchSize": {
+        "type": "integer",
+        "minimum": 1
+      }
+    }
+  },
   "uiHints": {
     "enabled": {
       "label": "Enabled",

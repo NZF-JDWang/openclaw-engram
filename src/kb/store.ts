@@ -120,6 +120,41 @@ export function getKnowledgeDocument(config: EngramConfig, idOrPath: string): KB
   }
 }
 
+export function getKnowledgeDocumentByLocation(
+  config: EngramConfig,
+  collectionName: string,
+  relPath: string,
+): KBDocumentRow | null {
+  if (!existsSync(config.dbPath)) {
+    return null;
+  }
+
+  const db = new DatabaseSync(config.dbPath, { open: true, readOnly: true });
+  try {
+    const document = db
+      .prepare(`
+        SELECT doc_id AS docId, collection_name AS collectionName, rel_path AS relPath, title
+        FROM kb_documents
+        WHERE collection_name = ? AND rel_path = ?
+        LIMIT 1
+      `)
+      .get(collectionName, relPath) as
+      | { docId: string; collectionName: string; relPath: string; title: string }
+      | undefined;
+
+    if (!document) {
+      return null;
+    }
+
+    return {
+      ...document,
+      content: fetchDocumentContent(db, document.docId),
+    };
+  } finally {
+    db.close();
+  }
+}
+
 function queryLexicalRows(
   db: DatabaseSync,
   tokens: string[],
