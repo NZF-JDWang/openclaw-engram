@@ -1,7 +1,7 @@
 import { type Dirent, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import type { EngramConfig, EngramKbCollection } from "../config.js";
 
 export type AutoDetectedVault = {
@@ -13,6 +13,17 @@ export type AutoDetectedVault = {
 export type AutoDetectedCollection = {
   collection: EngramKbCollection;
   vault: AutoDetectedVault;
+};
+
+type VaultConfigPersistenceApi = {
+  id: string;
+  pluginConfig?: Record<string, unknown>;
+  runtime?: {
+    config?: {
+      loadConfig?: () => OpenClawConfig;
+      writeConfigFile?: (config: OpenClawConfig) => Promise<void>;
+    };
+  };
 };
 
 export function autoDetectVaultCollections(
@@ -50,7 +61,7 @@ export function autoDetectVaultCollections(
 }
 
 export async function persistDetectedCollections(
-  api: OpenClawPluginApi,
+  api: VaultConfigPersistenceApi,
   collections: EngramKbCollection[],
 ): Promise<boolean> {
   if (collections.length === 0) {
@@ -70,7 +81,7 @@ export async function persistDetectedCollections(
   const currentEntry = ensureRecord(entries, api.id);
   const nextPluginConfig = ensureRecord(currentEntry, "config");
   nextPluginConfig.kbCollections = mergeCollections(nextPluginConfig.kbCollections, collections);
-  await runtimeConfig.writeConfigFile(nextConfig as never);
+  await runtimeConfig.writeConfigFile(nextConfig as OpenClawConfig);
   return true;
 }
 

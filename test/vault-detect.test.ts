@@ -1,6 +1,7 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveEngramConfig } from "../src/config.js";
 import {
@@ -75,7 +76,7 @@ describe("vault detection", () => {
   });
 
   it("persists detected collections through runtime config when available", async () => {
-    const writeConfigFile = vi.fn<(cfg: unknown) => Promise<void>>(async () => undefined);
+    const mockWriteConfigFile = vi.fn<(cfg: OpenClawConfig) => Promise<void>>(async () => undefined);
     const loadConfig = vi.fn(() => ({
       plugins: {
         entries: {
@@ -88,23 +89,25 @@ describe("vault detection", () => {
       },
     }));
 
-    const persisted = await persistDetectedCollections(
-      {
-        id: "engram",
-        pluginConfig: {},
-        runtime: {
-          config: {
-            loadConfig,
-            writeConfigFile,
-          },
+    const api = {
+      id: "engram",
+      pluginConfig: {},
+      runtime: {
+        config: {
+          loadConfig,
+          writeConfigFile: mockWriteConfigFile,
         },
-      } as never,
+      },
+    };
+
+    const persisted = await persistDetectedCollections(
+      api,
       [{ name: "obsidian", path: "/tmp/vault", pattern: "**/*.md" }],
     );
 
     expect(persisted).toBe(true);
-    expect(writeConfigFile).toHaveBeenCalledTimes(1);
-    const configObject = writeConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+    const configObject = mockWriteConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
     const pluginConfig = ((configObject.plugins as Record<string, unknown>)?.entries as Record<string, unknown>)
       ?.engram as Record<string, unknown>;
     const kbCollections = ((pluginConfig?.config as Record<string, unknown>)?.kbCollections ?? []) as Array<

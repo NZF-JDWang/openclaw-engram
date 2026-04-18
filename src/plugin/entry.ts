@@ -37,13 +37,13 @@ export default definePluginEntry({
           `[engram] Found vault: ${entry.vault.path} (${entry.vault.markdownFiles} markdown files). Added "${entry.collection.name}" to KB collections.`,
         );
       }
-      queueMicrotask(() => {
-        void persistDetectedCollections(api, autoDetected.map((entry) => entry.collection))
-          .catch((error: unknown) => {
-            const message = error instanceof Error ? error.message : String(error);
-            console.warn(`[engram] Failed to persist auto-detected vault configuration: ${message}`);
-          });
-      });
+      void persistDetectedCollections(api, autoDetected.map((entry) => entry.collection))
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(
+            `[engram] Failed to persist auto-detected vault configuration: ${message}. Vaults are available for this session and can be added manually to plugin config if needed.`,
+          );
+        });
     }
 
     const bootstrap = initializeEngramDatabase(config, process.env);
