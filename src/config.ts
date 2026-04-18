@@ -17,6 +17,7 @@ export const EngramConfigSchema = Type.Object({
   summarizationProvider: Type.Optional(Type.String()),
   summarizationModel: Type.Optional(Type.String()),
   kbEnabled: Type.Optional(Type.Boolean()),
+  autoDetectVaults: Type.Optional(Type.Boolean()),
   kbCollections: Type.Optional(Type.Array(EngramKbCollectionSchema)),
   kbAutoIndexSessions: Type.Optional(Type.Boolean()),
   kbSessionIndexCircuitBreaker: Type.Optional(Type.Boolean()),
@@ -62,6 +63,7 @@ export type EngramConfig = {
   summarizationProvider?: string;
   summarizationModel?: string;
   kbEnabled: boolean;
+  autoDetectVaults: boolean;
   kbCollections: EngramKbCollection[];
   kbAutoIndexSessions: boolean;
   kbSessionIndexCircuitBreaker: boolean;
@@ -110,6 +112,7 @@ export type EngramKbCollection = {
 const DEFAULTS = {
   enabled: true,
   kbEnabled: true,
+  autoDetectVaults: false,
   kbAutoIndexSessions: true,
   kbSessionIndexCircuitBreaker: true,
   kbAutoIndexOnStart: false,
@@ -205,6 +208,7 @@ export function resolveEngramConfig(
     summarizationProvider: pickString(raw, "summarizationProvider"),
     summarizationModel: pickString(raw, "summarizationModel"),
     kbEnabled: pickBoolean(raw, "kbEnabled", DEFAULTS.kbEnabled),
+    autoDetectVaults: pickBoolean(raw, "autoDetectVaults", DEFAULTS.autoDetectVaults),
     kbCollections: pickCollections(raw, "kbCollections"),
     kbAutoIndexSessions: pickBoolean(raw, "kbAutoIndexSessions", DEFAULTS.kbAutoIndexSessions),
     kbSessionIndexCircuitBreaker: pickBoolean(

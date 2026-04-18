@@ -117,6 +117,7 @@ All three layers share a single `engram.db` SQLite database. No subprocesses, no
           "condensedTargetTokens": 1500,
           "summarizationModel": "ollama-openai/kimi-k2.5:cloud",
           "kbEnabled": true,
+          "autoDetectVaults": true,
           "kbAutoIndexOnStart": true,
           "kbAutoIndexSessions": true,
           "kbCollections": [

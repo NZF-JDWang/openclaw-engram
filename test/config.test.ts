@@ -54,6 +54,7 @@ describe("resolveEngramConfig", () => {
 
   it("supports configured KB collections and startup indexing flags", () => {
     const config = resolveEngramConfig({
+      autoDetectVaults: true,
       kbCollections: [
         {
           name: "docs",
@@ -74,6 +75,7 @@ describe("resolveEngramConfig", () => {
 
     expect(config.kbCollections).toHaveLength(1);
     expect(config.kbCollections[0]?.name).toBe("docs");
+    expect(config.autoDetectVaults).toBe(true);
     expect(config.kbAutoIndexOnStart).toBe(true);
     expect(config.kbAutoIndexSessions).toBe(false);
     expect(config.kbSessionIndexCircuitBreaker).toBe(false);
@@ -114,5 +116,6 @@ describe("resolveEngramConfig", () => {
     expect(config.embedBatchSize).toBe(4);
     expect(config.summarizationProvider).toBe("provider-a");
     expect(config.summarizationModel).toBe("model-a");
+    expect(config.autoDetectVaults).toBe(false);
   });
 });

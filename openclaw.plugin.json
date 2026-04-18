@@ -26,6 +26,9 @@
       "kbEnabled": {
         "type": "boolean"
       },
+      "autoDetectVaults": {
+        "type": "boolean"
+      },
       "kbCollections": {
         "type": "array",
         "items": {
@@ -250,6 +253,10 @@
     "kbEnabled": {
       "label": "Knowledge Base Enabled",
       "help": "Enable indexing and retrieval for markdown collections"
+    },
+    "autoDetectVaults": {
+      "label": "Auto Detect Vaults",
+      "help": "Detect and add Obsidian vaults as KB collections on startup, even when collections already exist"
     },
     "maxMessageContentBytes": {
       "label": "Max Message Bytes",
