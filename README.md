@@ -23,25 +23,24 @@ It combines:
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                         Engram                           │
-│                                                          │
-│  ┌──────────────┐  ┌───────────────┐  ┌──────────────┐  │
-│  │   Context    │  │   Knowledge   │  │    Recall     │  │
-│  │    Engine    │  │     Base      │  │   Injector    │  │
-│  │              │  │               │  │               │  │
-│  │ • messages   │  │ • kb_chunks   │  │ • persona     │  │
-│  │ • summaries  │  │ • kb_docs     │  │ • facts       │  │
-│  │ • context    │  │ • kb_embeds   │  │ • KB results  │  │
-│  │   items      │  │ • kb_facts    │  │               │  │
-│  └──────┬───────┘  └───────┬───────┘  └──────┬───────┘  │
-│         │                  │                  │          │
-│         └──────────────────┼──────────────────┘          │
-│                            │                            │
-│                 ┌──────────┴──────────┐                  │
-│                 │  engram.db (SQLite) │                  │
-│                 └─────────────────────┘                  │
-└──────────────────────────────────────────────────────────┘
++------------------------------------------------------------------+
+|                             Engram                                |
+|                                                                   |
+|  +------------------+  +------------------+  +------------------+  |
+|  |  Context Engine  |  |  Knowledge Base  |  | Recall Injector  |  |
+|  |                  |  |                  |  |                  |  |
+|  |  * messages      |  |  * kb_chunks     |  |  * persona       |  |
+|  |  * summaries     |  |  * kb_docs       |  |  * facts         |  |
+|  |  * context_items |  |  * kb_embeds     |  |  * KB results    |  |
+|  |                  |  |  * kb_facts      |  |                  |  |
+|  +--------+---------+  +--------+---------+  +--------+---------+  |
+|           |                     |                     |           |
+|           +---------------------+---------------------+           |
+|                                 |                                 |
+|                     +-----------+-----------+                     |
+|                     | engram.db (SQLite)  |                     |
+|                     +---------------------+                     |
++------------------------------------------------------------------+
 ```
 
 All three layers share a single `engram.db` SQLite database. No subprocesses, no native binaries, no cross-repo dependencies.
