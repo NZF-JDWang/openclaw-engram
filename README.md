@@ -1,6 +1,10 @@
 # Engram
 
 <p align="center">
+  <img src="engram-hero.png" alt="Engram — Unified OpenClaw Memory System" width="800">
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/status-active-brightgreen" alt="Status">
   <img src="https://img.shields.io/badge/OpenClaw-plugin-blueviolet" alt="OpenClaw Plugin">
   <img src="https://img.shields.io/badge/kind-context--engine-orange" alt="Context Engine">
