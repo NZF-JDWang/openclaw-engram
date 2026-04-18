@@ -11,8 +11,6 @@ import {
   createEngramForgetTool,
   createEngramGetTool,
   createEngramIndexTool,
-  createEngramMemoryGetTool,
-  createEngramMemorySearchTool,
   createEngramPersonaTool,
   createEngramRememberTool,
   createEngramReviewTool,
@@ -50,8 +48,6 @@ export default definePluginEntry({
     api.registerTool(() => createEngramStatusTool(config));
     api.registerTool(() => createEngramSearchTool(config));
     api.registerTool(() => createEngramGetTool(config));
-    api.registerTool(() => createEngramMemorySearchTool(config), { names: ["memory_search"] });
-    api.registerTool(() => createEngramMemoryGetTool(config), { names: ["memory_get"] });
     api.registerTool(() => createEngramIndexTool(config));
     api.registerTool(() => createEngramExportTool(config));
     api.registerTool(() => createEngramPersonaTool(config));
