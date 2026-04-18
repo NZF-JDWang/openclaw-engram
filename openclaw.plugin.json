@@ -104,9 +104,32 @@
         "type": "integer",
         "minimum": -1
       },
+      "compactionMaxDepth": {
+        "type": "integer",
+        "minimum": -1
+      },
       "newSessionRetainDepth": {
         "type": "integer",
         "minimum": -1
+      },
+      "maxMessageContentBytes": {
+        "type": "integer",
+        "minimum": 256
+      },
+      "pruneSummarizedMessages": {
+        "type": "boolean"
+      },
+      "pruneMinAgeDays": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "dbSizeWarningMb": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "summaryQualityThreshold": {
+        "type": "integer",
+        "minimum": 1
       },
       "kbSearchTimeoutMs": {
         "type": "integer",
@@ -227,6 +250,30 @@
     "kbEnabled": {
       "label": "Knowledge Base Enabled",
       "help": "Enable indexing and retrieval for markdown collections"
+    },
+    "maxMessageContentBytes": {
+      "label": "Max Message Bytes",
+      "help": "Cap stored message and tool content size to limit database growth"
+    },
+    "pruneSummarizedMessages": {
+      "label": "Prune Summarized Messages",
+      "help": "Delete older raw messages once they have been safely condensed into higher-level summaries"
+    },
+    "pruneMinAgeDays": {
+      "label": "Prune Min Age Days",
+      "help": "Only prune conversations whose raw messages are at least this many days old"
+    },
+    "compactionMaxDepth": {
+      "label": "Compaction Max Depth",
+      "help": "Maximum summary depth to build during compaction passes"
+    },
+    "summaryQualityThreshold": {
+      "label": "Summary Quality Threshold",
+      "help": "Minimum quality score required before a summary is eligible for higher-level compaction"
+    },
+    "dbSizeWarningMb": {
+      "label": "DB Size Warning MB",
+      "help": "Warn in status output when the Engram database exceeds this size"
     },
     "embedEnabled": {
       "label": "Embeddings Enabled",
