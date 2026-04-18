@@ -184,6 +184,24 @@
         "minimum": 0,
         "maximum": 1
       },
+      "recallSessionMaxResults": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "recallSessionMinScore": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "recallFeedbackEnabled": {
+        "type": "boolean"
+      },
+      "kbIncrementalSync": {
+        "type": "boolean"
+      },
+      "autoDetectVaults": {
+        "type": "boolean"
+      },
       "personaFile": {
         "type": "string"
       },
@@ -278,6 +296,26 @@
     "embedEnabled": {
       "label": "Embeddings Enabled",
       "help": "Enable optional embedding-based reranking via an OpenAI-compatible endpoint"
+    },
+    "recallSessionMaxResults": {
+      "label": "Session Recall Max Results",
+      "help": "Maximum number of session-derived recall results per turn"
+    },
+    "recallSessionMinScore": {
+      "label": "Session Recall Min Score",
+      "help": "Minimum relevance score for session recall injection"
+    },
+    "recallFeedbackEnabled": {
+      "label": "Recall Feedback Enabled",
+      "help": "Track which recalled memories are actually used"
+    },
+    "kbIncrementalSync": {
+      "label": "Incremental KB Sync",
+      "help": "Only re-index files that changed since last sync"
+    },
+    "autoDetectVaults": {
+      "label": "Auto-Detect Vaults",
+      "help": "Automatically discover and index Obsidian vaults on startup"
     }
   }
 }
