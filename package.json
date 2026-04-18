@@ -1,7 +1,8 @@
 {
-  "name": "@martian-engineering/engram",
+  "name": "@jd-wang/engram",
   "version": "0.1.0",
   "description": "Unified OpenClaw memory plugin combining context compaction, KB indexing, and proactive recall",
+  "author": "JD Wang",
   "type": "module",
   "main": "dist/index.js",
   "license": "MIT",

@@ -114,6 +114,8 @@ export function importFromLcm(sourcePath: string, destDb: DatabaseSync): LcmImpo
     const largeFiles = tableExists(sourceDb, "large_files")
       ? (sourceDb.prepare(`SELECT file_id, conversation_id, file_name, mime_type, byte_size, storage_uri, exploration_summary, created_at FROM large_files`).all() as LcmLargeFileRow[])
       : [];
+    const messageConversationIds = buildMessageConversationIdMap(messages);
+    const summaryConversationIds = buildSummaryConversationIdMap(summaries);
 
     retryOnBusy(() => destDb.exec("BEGIN IMMEDIATE"));
     try {
@@ -167,7 +169,7 @@ export function importFromLcm(sourcePath: string, destDb: DatabaseSync): LcmImpo
       for (const row of messageParts) {
         insertMessagePart.run(
           mapPartId(row.part_id),
-          mapMessageIdFromMessage(row.message_id, messages),
+          mapMessageIdFromMessage(row.message_id, messageConversationIds),
           row.session_id,
           row.part_type,
           row.ordinal,
@@ -191,7 +193,7 @@ export function importFromLcm(sourcePath: string, destDb: DatabaseSync): LcmImpo
         );
       }
       for (const row of summaryMessages) {
-        const conversationId = findConversationIdForSummary(row.summary_id, summaries);
+        const conversationId = findConversationIdForSummary(row.summary_id, summaryConversationIds);
         if (conversationId == null) {
           continue;
         }
@@ -202,8 +204,8 @@ export function importFromLcm(sourcePath: string, destDb: DatabaseSync): LcmImpo
         );
       }
       for (const row of summaryParents) {
-        const childConversationId = findConversationIdForSummary(row.summary_id, summaries);
-        const parentConversationId = findConversationIdForSummary(row.parent_summary_id, summaries);
+        const childConversationId = findConversationIdForSummary(row.summary_id, summaryConversationIds);
+        const parentConversationId = findConversationIdForSummary(row.parent_summary_id, summaryConversationIds);
         if (childConversationId == null || parentConversationId == null) {
           continue;
         }
@@ -214,12 +216,20 @@ export function importFromLcm(sourcePath: string, destDb: DatabaseSync): LcmImpo
         );
       }
       for (const row of contextItems) {
+        const mappedMessageId = row.message_id == null ? null : mapMessageIdFromMessage(row.message_id, messageConversationIds);
+        const mappedSummaryId =
+          row.summary_id == null
+            ? null
+            : mapSummaryIdFromSummary(row.summary_id, summaryConversationIds);
+        if ((row.message_id != null && mappedMessageId == null) || (row.summary_id != null && mappedSummaryId == null)) {
+          continue;
+        }
         insertContextItem.run(
           mapConversationId(row.conversation_id),
           row.ordinal,
           row.item_type,
-          row.message_id == null ? null : mapMessageId(row.conversation_id, row.message_id),
-          row.summary_id == null ? null : mapSummaryId(row.conversation_id, row.summary_id),
+          mappedMessageId,
+          mappedSummaryId,
           row.created_at,
         );
       }
@@ -305,12 +315,24 @@ function mapLargeFileId(fileId: string): string {
   return `lcm:file:${fileId}`;
 }
 
-function mapMessageIdFromMessage(messageId: number, messages: LcmMessageRow[]): string | null {
-  const row = messages.find((message) => message.message_id === messageId);
-  return row ? mapMessageId(row.conversation_id, row.message_id) : null;
+function buildMessageConversationIdMap(messages: LcmMessageRow[]): Map<number, number> {
+  return new Map(messages.map((message) => [message.message_id, message.conversation_id]));
 }
 
-function findConversationIdForSummary(summaryId: string, summaries: LcmSummaryRow[]): number | null {
-  const row = summaries.find((summary) => summary.summary_id === summaryId);
-  return row?.conversation_id ?? null;
+function buildSummaryConversationIdMap(summaries: LcmSummaryRow[]): Map<string, number> {
+  return new Map(summaries.map((summary) => [summary.summary_id, summary.conversation_id]));
+}
+
+function mapMessageIdFromMessage(messageId: number, messageConversationIds: Map<number, number>): string | null {
+  const conversationId = messageConversationIds.get(messageId);
+  return conversationId == null ? null : mapMessageId(conversationId, messageId);
+}
+
+function mapSummaryIdFromSummary(summaryId: string, summaryConversationIds: Map<string, number>): string | null {
+  const conversationId = summaryConversationIds.get(summaryId);
+  return conversationId == null ? null : mapSummaryId(conversationId, summaryId);
+}
+
+function findConversationIdForSummary(summaryId: string, summaryConversationIds: Map<string, number>): number | null {
+  return summaryConversationIds.get(summaryId) ?? null;
 }
