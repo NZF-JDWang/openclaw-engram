@@ -1,256 +1,140 @@
 # Engram
 
-<p align="center">
-  <img src="engram-hero.png" alt="Engram — Unified OpenClaw Memory System" width="800">
-</p>
+Engram is a standalone OpenClaw memory plugin that gives an agent persistent recall, structured knowledge, and persona continuity — all backed by a single SQLite database.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/status-active-brightgreen" alt="Status">
-  <img src="https://img.shields.io/badge/OpenClaw-plugin-blueviolet" alt="OpenClaw Plugin">
-  <img src="https://img.shields.io/badge/kind-context--engine-orange" alt="Context Engine">
-</p>
+It combines three roles in one package:
 
-**Engram** is a unified OpenClaw memory plugin that replaces three separate systems — lossless-claw, qmd, and precog — with one in-process SQLite-backed engine.
+- **Context engine** — persistent transcript storage with multi-level compaction, so conversations survive context window limits
+- **Knowledge base** — searchable index over imported documents, indexed directories, and compacted session summaries
+- **Proactive recall** — injects persona, approved facts, and relevant KB results into context before the prompt is built
 
-It combines:
+No external services required. No separate databases to manage. One plugin, one store.
 
-| Layer | Replaces | What it does |
-|-------|----------|--------------|
-| **Context Engine** | lossless-claw | Persistent transcript storage with DAG-based multi-level compaction |
-| **Knowledge Base** | qmd | Local search over files, directories, and session summaries (BM25 + FTS5 + optional vectors) |
-| **Proactive Recall** | precog | Surfaces relevant KB results before each prompt build |
+## Current Features
 
-## Architecture
-
-```
-+------------------------------------------------------------------+
-|                             Engram                                |
-|                                                                   |
-|  +------------------+  +------------------+  +------------------+  |
-|  |  Context Engine  |  |  Knowledge Base  |  | Recall Injector  |  |
-|  |                  |  |                  |  |                  |  |
-|  |  * messages      |  |  * kb_chunks     |  |  * KB results    |  |
-|  |  * summaries     |  |  * kb_docs       |  |                  |  |
-|  |  * context_items |  |  * kb_embeds     |  |                  |  |
-|  +--------+---------+  +--------+---------+  +--------+---------+  |
-|           |                     |                     |           |
-|           +---------------------+---------------------+           |
-|                                 |                                 |
-|                     +-----------+-----------+                     |
-|                     | engram.db (SQLite)  |                     |
-|                     +---------------------+                     |
-+------------------------------------------------------------------+
-```
-
-All three layers share a single `engram.db` SQLite database. No subprocesses, no native binaries, no cross-repo dependencies.
-
-## Key Features
-
-### Context Engine
-- **Persistent transcript storage** — every message, every turn, never lost
-- **DAG-based compaction** — leaf summaries (depth 0) → condensed summaries (depth 1+) → depth 2+, forming a compression hierarchy
-- **Three-level escalation** — normal summarization → aggressive → extractive TF-IDF fallback (always succeeds, no LLM required)
-- **Per-session factory** — each session gets its own DB handle, eliminating the "database is not open" singleton crash
-
-### Knowledge Base
-- **BM25 + FTS5** full-text search over imported files, directories, and session summaries
-- **Optional vector embeddings** — generate and store embeddings for semantic reranking
-- **Auto-indexing** — configured collections sync on startup; session summaries index automatically
-- **Obsidian vault support** — point engram at your vault and everything becomes searchable
-- **Temporal decay** — older documents rank lower by default
-
-### Proactive Recall
-- **KB recall** — relevant knowledge base chunks surfaced before each model turn
-- **Duplicate suppression** — skips results already present in recent context
-- **Confidence gating** — only injects when scores exceed configurable thresholds
-- **Score: 0.55** minimum, **3 results** max, **80+80 tokens** budget
-
-### Data Lifecycle
-- **Storage-time truncation** — messages and parts capped at 32KB to prevent bloat
-- **Summary-driven pruning** — once a conversation is summarized to depth ≥ 1, raw messages can be pruned after 90 days
-- **Scheduled compaction** — nightly depth-3+ compaction keeps the summary DAG healthy
-- **Scheduled maintenance** — daily VACUUM, WAL checkpoint, ANALYZE
-- **Quality pipeline** — strips base64, raw metadata, and truncated content before storage; flags short/broken summaries for re-summarization
+- Persistent transcript storage in `engram.db`
+- Context assembly from `messages`, `summaries`, and `context_items`
+- Session continuity via `session_end_artifacts`
+- Runtime-backed leaf and condensed compaction when plugin runtime subagents are available, with deterministic fallback and `summary_parents` lineage
+- Searchable KB indexing for files, directories, and compacted session summaries
+- Configured KB collections can be synced automatically on plugin startup
+- Optional embedding generation and `kb_embeddings` storage during indexing
+- Persona file injection via `prependSystemContext`
+- Approved fact storage, review, export, search, and recall
+- Lightweight conflict surfacing for similar durable facts
+- Migration from existing legacy memory stores
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `/engram` | Status overview (DB size, message count, summary depth distribution) |
-| `/engram doctor` | Health check and diagnostics |
-| `/engram search <query>` | Search the knowledge base |
-| `/engram get <id>` | Retrieve a document or chunk by ID |
-| `/engram index <path>` | Index a file or directory into the KB |
-| `/engram migrate` | Migrate from lossless-claw or qmd |
-| `/engram migrate --dry-run` | Preview migration without writing |
-| `/engram maintain` | VACUUM, WAL checkpoint, ANALYZE, size warning |
-| `/engram compact` | Force full compaction of current session |
-| `/engram export [path]` | Export all memories to markdown |
-| `/engram forget <id> [reason]` | Retire a KB entry |
+Engram registers the `/engram` command with these subcommands:
+
+- `/engram`
+- `/engram doctor`
+- `/engram migrate`
+- `/engram migrate --dry-run`
+- `/engram search <query>`
+- `/engram get <id>`
+- `/engram index <path>`
+- `/engram review`
+- `/engram conflicts`
+- `/engram approve <factId>`
+- `/engram reject <factId>`
+- `/engram persona`
+- `/engram persona set <text>`
+- `/engram export [path]`
+- `/engram compact`
 
 ## Tools
 
-| Tool | Description |
-|------|-------------|
-| `engram_status` | DB size, message count, summary depth distribution, recall latency |
-| `engram_search` | Search the KB with BM25 + optional vector reranking |
-| `engram_get` | Read a document or chunk by path or ID |
-| `engram_index` | Index a file or directory |
-| `engram_export` | Export memories to markdown |
-| `engram_forget` | Deprecate a KB entry with reason and timestamp |
+Engram currently exposes these tools:
 
-## Configuration
+- `engram_status`
+- `engram_search`
+- `engram_get`
+- `engram_index`
+- `engram_export`
+- `engram_persona`
+- `engram_remember`
+- `engram_forget`
+- `engram_review`
 
-```json
-{
-  "plugins": {
-    "entries": {
-      "engram": {
-        "enabled": true,
-        "config": {
-          "dbPath": "~/.openclaw/engram.db",
-          "contextThreshold": 0.75,
-          "freshTailCount": 32,
-          "incrementalMaxDepth": -1,
-          "leafChunkTokens": 20000,
-          "leafTargetTokens": 2000,
-          "condensedTargetTokens": 1500,
-          "summarizationModel": "ollama-openai/kimi-k2.5:cloud",
-          "kbEnabled": true,
-          "kbAutoIndexOnStart": true,
-          "kbAutoIndexSessions": true,
-          "kbCollections": [
-            {
-              "name": "obsidian",
-              "path": "/path/to/obsidian/vault",
-              "pattern": "**/*.md",
-              "description": "Obsidian vault"
-            },
-            {
-              "name": "workspace-memory",
-              "path": "~/.openclaw/workspace/memory",
-              "pattern": "**/*.md",
-              "description": "Claire workspace memory files"
-            }
-          ],
-          "recallEnabled": true,
-          "recallMaxResults": 3,
-          "recallMinScore": 0.55,
-          "recallMaxTokens": 80,
-          "recallPrependMaxTokens": 80,
-          "embedEnabled": true,
-          "embedApiUrl": "http://192.168.0.11:11434/v1/embeddings",
-          "embedApiModel": "nomic-embed-text:latest",
-          "maxMessageContentBytes": 32768,
-          "pruneSummarizedMessages": true,
-          "pruneMinAgeDays": 90,
-          "compactionMaxDepth": 3,
-          "dbSizeWarningMb": 2000,
-          "summaryQualityThreshold": 50
-        }
-      }
-    },
-    "slots": {
-      "contextEngine": "engram"
-    }
-  }
-}
-```
+## Config
 
-All paths default relative to `OPENCLAW_STATE_DIR` (falls back to `~/.openclaw`).
+Supported plugin config keys:
 
-### Key Config Explained
+- `enabled`
+- `dbPath`
+- `personaPath`
+- `exportPath`
+- `summarizationProvider`
+- `summarizationModel`
+- `kbEnabled`
+- `kbCollections`
+- `kbAutoIndexSessions`
+- `kbSessionIndexCircuitBreaker`
+- `kbAutoIndexOnStart`
+- `recallEnabled`
+- `embedEnabled`
+- `embedApiUrl`
+- `embedApiModel`
+- `embedApiKey`
+- `embedBatchSize`
+- `contextThreshold`
+- `freshTailCount`
+- `leafChunkTokens`
+- `leafTargetTokens`
+- `condensedTargetTokens`
+- `incrementalMaxDepth`
+- `newSessionRetainDepth`
+- `kbSearchTimeoutMs`
+- `maxSearchCandidates`
+- `recallMaxTokens`
+- `recallMaxResults`
+- `recallPrependMaxTokens`
+- `recallMinScore`
+- `recallGapThreshold`
+- `recallHighConfidenceScore`
 
-| Key | Default | Purpose |
-|-----|---------|---------|
-| `contextThreshold` | 0.75 | Fraction of context window that triggers compaction |
-| `freshTailCount` | 32 | Recent messages protected from compaction |
-| `leafTargetTokens` | 2000 | Target token count for leaf summaries |
-| `condensedTargetTokens` | 1500 | Target token count for condensed summaries |
-| `recallMinScore` | 0.55 | Minimum relevance score for recall injection |
-| `recallMaxResults` | 3 | Maximum number of recall results per turn |
-| `recallMaxTokens` | 80 | Maximum tokens for appended recall block |
-| `recallPrependMaxTokens` | 80 | Maximum tokens for prepended recall block |
-| `maxMessageContentBytes` | 32768 | Cap stored message content at 32KB |
-| `pruneSummarizedMessages` | true | Prune raw messages once summarized |
-| `pruneMinAgeDays` | 90 | Don't prune messages younger than 90 days |
-| `compactionMaxDepth` | 3 | Condense summaries up to depth 3 |
-| `dbSizeWarningMb` | 2000 | Warn if DB exceeds this size |
-| `summaryQualityThreshold` | 50 | Minimum quality score for summaries |
+Defaults are resolved relative to `OPENCLAW_STATE_DIR` when available, otherwise `~/.openclaw`.
 
-When `summarizationProvider` and `summarizationModel` are omitted, Engram uses the active OpenClaw runtime defaults. If runtime subagents are unavailable or the summarizer call fails, compaction falls back to the built-in deterministic extractive summarizer.
+Legacy config aliases are still accepted and mapped onto current keys.
+
+When `summarizationProvider` and `summarizationModel` are omitted, Engram uses the active OpenClaw runtime defaults. If runtime subagents are unavailable or the summarizer call fails, compaction falls back to the built-in deterministic summarizer.
+
+## Known Tradeoff
+
+Engram currently performs compaction inline in `afterTurn`. That keeps the implementation simple and deterministic, but it can reduce prompt-cache hit rates on hosts that benefit from deferred or cache-aware compaction strategies. This is a known performance tradeoff, not a data-integrity issue.
 
 ## Storage Layout
 
-```
-~/.openclaw/
-├── engram.db              # Main SQLite database
-└── engram-export.md       # Markdown export of indexed content
-```
+Primary files:
 
-### Database Schema
+- `engram.db`: main SQLite store
+- `engram-persona.md`: always-injected persona file
+- `engram-export.md`: markdown export of persona and facts
 
-| Area | Tables | Purpose |
-|------|--------|---------|
-| Transcript | `conversations`, `messages`, `message_parts` | Raw conversation storage |
-| Compaction DAG | `summaries`, `summary_messages`, `summary_parents`, `context_items` | Multi-level summary hierarchy |
-| Knowledge Base | `kb_collections`, `kb_documents`, `kb_chunks`, `kb_embeddings` | Indexed documents and chunks |
+Important logical areas inside the database:
 
-## Installation
+- transcript: `conversations`, `messages`, `message_parts`
+- compaction DAG: `summaries`, `summary_messages`, `summary_parents`, `context_items`
+- KB: `kb_collections`, `kb_documents`, `kb_chunks`, `kb_embeddings`
+- durable memory: `kb_facts`, `kb_conflicts`, `session_end_artifacts`
 
-```bash
-# From local archive
-openclaw plugins install /path/to/engram-0.1.0.tgz
+## Retrieval Behavior
 
-# Or build from source
-git clone https://github.com/NZF-JDWang/openclaw-engram.git
-cd openclaw-engram
-npm install
-npm run build
-cp dist/index.js ~/.openclaw/extensions/engram/dist/index.js
-```
+- Persona is injected first through `prependSystemContext`
+- Approved facts are searched alongside KB results
+- Stored embeddings can rerank lexical KB candidates when embedding search is enabled
+- Configured collection sync respects each collection's declared glob pattern before indexing
+- Session-summary chunks in `__sessions` are ranked below primary documents
+- Retrieval applies temporal decay by memory type
+- The recall hook suppresses trivial prompts and snippets already present in recent non-user context
 
-Then add to `openclaw.json`:
+## Validation
 
-```json
-{
-  "plugins": {
-    "slots": {
-      "contextEngine": "engram"
-    }
-  }
-}
-```
+Current local validation status:
 
-Engram replaces the `contextEngine` slot — any existing context engine (lossless-claw) must be disabled or removed.
+- `npm run typecheck`
+- `npm test`
 
-## Migration from Existing Systems
-
-Engram can import data from lossless-claw and qmd:
-
-```bash
-/engram migrate          # Auto-detect and import from LCM/QMD
-/engram migrate --dry-run  # Preview without writing
-```
-
-Legacy data is preserved — migration copies, doesn't move. After verifying everything works, the old systems can be safely removed.
-
-## Performance
-
-- **DB size**: stabilizes at 400-600 MB with proper pruning; configurable warning at 2 GB
-- **Recall latency**: ~100-200ms per turn for KB search
-- **Compaction**: inline on `afterTurn`, with extractive fallback that always succeeds
-- **Search**: BM25 + FTS5 for lexical, optional vector reranking for semantic
-
-## Development
-
-```bash
-npm install          # Install dependencies
-npm run build        # Build with esbuild
-npm test             # Run test suite
-npm run typecheck    # Type checking
-```
-
-## License
-
-Private — © 2026 JD Wang
+The current suite covers config resolution, migration detection/import, KB search and indexing, recall injection, persona injection, compaction, engine behavior, fact lifecycle, and conflict surfacing.
