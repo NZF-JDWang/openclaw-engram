@@ -19,7 +19,17 @@ export type MaintenanceReport = {
   ftsRebuilt: boolean;
   prunedConversations: number;
   prunedMessages: number;
+  prunedRecallEvents: number;
+  recallFeedback: RecallFeedbackStats | null;
   status: EngramStatusSnapshot;
+};
+
+export type RecallFeedbackStats = {
+  totalEvents: number;
+  uniqueChunks: number;
+  referenceRate: number;
+  boostedChunks: number;
+  demotedChunks: number;
 };
 
 export type ResummarizeReport = {
@@ -31,6 +41,14 @@ export function maintainDatabase(db: DatabaseSync, config: EngramConfig): Mainte
   const pruneResult = config.pruneSummarizedMessages
     ? pruneSummarizedConversations(db, config)
     : { conversations: 0, messages: 0 };
+
+  const prunedRecallEvents = hasTable(db, "recall_events")
+    ? pruneStaleRecallEvents(db, config.pruneMinAgeDays)
+    : 0;
+
+  const recallFeedback = hasTable(db, "recall_events")
+    ? summarizeRecallFeedback(db)
+    : null;
 
   const checkpointRow = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as
     | { busy?: number; log?: number; checkpointed?: number }
@@ -49,8 +67,17 @@ export function maintainDatabase(db: DatabaseSync, config: EngramConfig): Mainte
     ftsRebuilt,
     prunedConversations: pruneResult.conversations,
     prunedMessages: pruneResult.messages,
+    prunedRecallEvents,
+    recallFeedback,
     status: readStatus(config),
   };
+}
+
+export function pruneStaleRecallEvents(db: DatabaseSync, windowDays: number): number {
+  const result = db.prepare(
+    `DELETE FROM recall_events WHERE datetime(created_at) <= datetime('now', ?)`,
+  ).run(`-${windowDays} days`) as { changes: number };
+  return result.changes;
 }
 
 export async function resummarizeLcmSummaries(
@@ -123,7 +150,46 @@ export async function resummarizeLcmSummaries(
   };
 }
 
+export function summarizeRecallFeedback(db: DatabaseSync): RecallFeedbackStats {
+  const totals = db.prepare(`
+    SELECT COUNT(*) AS totalEvents,
+           COUNT(DISTINCT chunk_id) AS uniqueChunks,
+           CAST(SUM(was_referenced) AS REAL) / NULLIF(COUNT(*), 0) AS referenceRate
+    FROM recall_events
+  `).get() as { totalEvents: number; uniqueChunks: number; referenceRate: number | null };
+
+  const chunkStats = db.prepare(`
+    SELECT chunk_id,
+           COUNT(*) AS totalInjections,
+           SUM(was_referenced) AS timesReferenced
+    FROM recall_events
+    GROUP BY chunk_id
+  `).all() as Array<{ chunk_id: string; totalInjections: number; timesReferenced: number }>;
+
+  let boostedChunks = 0;
+  let demotedChunks = 0;
+  for (const row of chunkStats) {
+    const rate = row.totalInjections > 0 ? row.timesReferenced / row.totalInjections : 0;
+    if (row.totalInjections >= 3 && rate >= 0.5) {
+      boostedChunks += 1;
+    } else if (row.totalInjections >= 5 && rate === 0) {
+      demotedChunks += 1;
+    }
+  }
+
+  return {
+    totalEvents: totals.totalEvents,
+    uniqueChunks: totals.uniqueChunks,
+    referenceRate: totals.referenceRate ?? 0,
+    boostedChunks,
+    demotedChunks,
+  };
+}
+
 export function formatMaintenanceReport(report: MaintenanceReport): string {
+  const recallLine = report.recallFeedback
+    ? `recallFeedback: events=${report.recallFeedback.totalEvents}, uniqueChunks=${report.recallFeedback.uniqueChunks}, referenceRate=${(report.recallFeedback.referenceRate * 100).toFixed(1)}%, boosted=${report.recallFeedback.boostedChunks}, demoted=${report.recallFeedback.demotedChunks}`
+    : "recallFeedback: n/a";
   return [
     "Engram maintenance",
     `walCheckpoint: ${report.walCheckpoint}`,
@@ -132,6 +198,8 @@ export function formatMaintenanceReport(report: MaintenanceReport): string {
     `ftsRebuilt: ${report.ftsRebuilt}`,
     `prunedConversations: ${report.prunedConversations}`,
     `prunedMessages: ${report.prunedMessages}`,
+    `prunedRecallEvents: ${report.prunedRecallEvents}`,
+    recallLine,
     "",
     readStatusLines(report.status),
   ].join("\n");

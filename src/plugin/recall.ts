@@ -1,5 +1,6 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import type { EngramConfig } from "../config.js";
 import { openDatabase } from "../db/connection.js";
 import { estimateTokens } from "../token-estimate.js";
@@ -101,6 +102,11 @@ export function createBeforePromptBuildHook(config: EngramConfig) {
             }
           }
         }
+      }
+
+      // Apply feedback weights to scores before ranking
+      if (config.recallFeedbackEnabled) {
+        applyFeedbackWeights(config, allHits);
       }
 
       // Rank with a wider pool, then apply session budget
@@ -261,6 +267,106 @@ function diversifyBySource(candidates: RecallCandidate[], maxResults: number): R
   }
 
   return diverse.slice(0, maxResults);
+}
+
+export function loadFeedbackWeights(db: DatabaseSync, chunkIds: string[]): Map<string, number> {
+  if (chunkIds.length === 0) return new Map();
+  const placeholders = chunkIds.map(() => "?").join(", ");
+  const rows = db.prepare(
+    `SELECT chunk_id AS chunkId,
+            COUNT(*) AS totalInjections,
+            SUM(was_referenced) AS timesReferenced
+     FROM recall_events
+     WHERE chunk_id IN (${placeholders})
+     GROUP BY chunk_id`,
+  ).all(...chunkIds) as Array<{ chunkId: string; totalInjections: number; timesReferenced: number }>;
+
+  const weights = new Map<string, number>();
+  for (const row of rows) {
+    const rate = row.totalInjections > 0 ? row.timesReferenced / row.totalInjections : 0;
+    let weight = 1.0;
+    if (row.totalInjections >= 3 && rate >= 0.5) {
+      weight = Math.min(1.5, 1 + rate * 0.5);
+    } else if (row.totalInjections >= 5 && rate === 0) {
+      weight = 0.8;
+    }
+    weights.set(row.chunkId, weight);
+  }
+  return weights;
+}
+
+function applyFeedbackWeights(config: EngramConfig, hits: RecallMemory[]): void {
+  if (hits.length === 0) return;
+  try {
+    const database = openDatabase(config.dbPath);
+    try {
+      const weights = loadFeedbackWeights(database.db, hits.map((h) => h.chunkId));
+      for (const hit of hits) {
+        const weight = weights.get(hit.chunkId);
+        if (weight !== undefined && weight !== 1.0) {
+          hit.score *= weight;
+        }
+      }
+    } finally {
+      database.close();
+    }
+  } catch (error) {
+    console.warn(`[engram] Failed to load feedback weights: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+export function scanResponseForRecallReferences(
+  db: DatabaseSync,
+  conversationId: string,
+  responseText: string,
+): number {
+  if (!responseText.trim()) return 0;
+
+  const rows = db.prepare(`
+    SELECT re.event_id, re.chunk_id, kd.title
+    FROM recall_events re
+    JOIN kb_chunks kc ON kc.chunk_id = re.chunk_id
+    JOIN kb_documents kd ON kd.doc_id = kc.doc_id
+    WHERE re.conversation_id = ?
+      AND re.was_referenced = 0
+  `).all(conversationId) as Array<{ event_id: string; chunk_id: string; title: string }>;
+
+  if (rows.length === 0) return 0;
+
+  const responseLower = responseText.toLowerCase();
+  const update = db.prepare(`UPDATE recall_events SET was_referenced = 1 WHERE event_id = ?`);
+  let marked = 0;
+  for (const row of rows) {
+    if (isChunkReferencedInResponse(responseLower, row.chunk_id, row.title)) {
+      update.run(row.event_id);
+      marked += 1;
+    }
+  }
+  return marked;
+}
+
+const RECALL_STOP_WORDS = new Set([
+  "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+  "of", "with", "by", "from", "is", "was", "are", "were", "be", "been",
+  "has", "have", "had", "do", "does", "did", "not", "that", "this",
+  "it", "its", "as", "so", "if", "up",
+]);
+
+function extractSignificantKeywords(title: string): string[] {
+  return title
+    .toLowerCase()
+    .split(/[\s\-_/.,;:!?()[\]{}'"]+/)
+    .filter((word) => word.length >= 4 && !RECALL_STOP_WORDS.has(word));
+}
+
+function isChunkReferencedInResponse(
+  responseLower: string,
+  chunkId: string,
+  title: string,
+): boolean {
+  if (responseLower.includes(chunkId.toLowerCase())) return true;
+  const keywords = extractSignificantKeywords(title);
+  return keywords.length >= 2 && keywords.every((kw) => responseLower.includes(kw));
 }
 
 function logRecallEvents(config: EngramConfig, conversationId: string, candidates: RecallCandidate[]): void {

@@ -14,6 +14,7 @@ import { retryOnBusy, type EngramDatabase } from "../db/connection.js";
 import { indexSessionSummaryById } from "../kb/indexer.js";
 import { sanitizeStoredContent } from "../lifecycle.js";
 import { pruneSummarizedConversationsForCurrentConfig } from "../plugin/maintenance.js";
+import { scanResponseForRecallReferences } from "../plugin/recall.js";
 import { estimateTokens } from "../token-estimate.js";
 import { assembleConversationContext } from "./assembler.js";
 import { compactConversation } from "./compaction.js";
@@ -166,6 +167,17 @@ export class EngramContextEngine implements ContextEngine {
     } catch (error) {
       console.warn(`[engram] afterTurn compaction failed: ${error instanceof Error ? error.message : String(error)}`);
     }
+
+    if (this.config.recallFeedbackEnabled) {
+      try {
+        const lastAssistantText = extractLastAssistantResponseText(params.messages);
+        if (lastAssistantText) {
+          scanResponseForRecallReferences(this.database.db, params.sessionId, lastAssistantText);
+        }
+      } catch (scanError) {
+        console.warn(`[engram] afterTurn recall scan failed: ${scanError instanceof Error ? scanError.message : String(scanError)}`);
+      }
+    }
   }
 
   async compact(_: { sessionId: string; tokenBudget?: number }): Promise<CompactResult> {
@@ -242,6 +254,16 @@ export class EngramContextEngine implements ContextEngine {
 function truncateSummaryText(value: string, targetTokens: number): string {
   const maxChars = Math.max(targetTokens * 4, 200);
   return value.length <= maxChars ? value : `${value.slice(0, maxChars - 3).trimEnd()}...`;
+}
+
+function extractLastAssistantResponseText(messages: Array<{ role?: string; content?: unknown }>): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "assistant") {
+      return normalizeContent(message.content);
+    }
+  }
+  return "";
 }
 
 function normalizeContent(content: unknown): string {

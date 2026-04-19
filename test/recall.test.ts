@@ -10,7 +10,9 @@ import {
   extractLatestUserQuery,
   formatRecallBlock,
   isDuplicateAgainstRecentContext,
+  loadFeedbackWeights,
   rankRecallCandidates,
+  scanResponseForRecallReferences,
   shouldInjectRecall,
 } from "../src/plugin/recall.js";
 
@@ -179,5 +181,191 @@ describe("recall hook", () => {
     expect(result).toBeUndefined();
     expect(existsSync(shadowLogFile)).toBe(true);
     expect(readFileSync(shadowLogFile, "utf8")).toContain("Use sqlite for the Engram store in shadow mode recall.");
+  });
+});
+
+describe("scanResponseForRecallReferences", () => {
+  it("marks events as referenced when all title keywords appear in the response", () => {
+    const root = mkdtempSync(join(tmpdir(), "engram-recall-scan-"));
+    tempPaths.push(root);
+    const dbPath = join(root, "engram.db");
+    const database = openDatabase(dbPath);
+    try {
+      database.db.exec(`
+        INSERT INTO kb_collections (name, path, pattern, description, auto_index, fts5_available, created_at) VALUES ('docs', '.', '**/*.md', 'Docs', 0, 0, datetime('now'));
+        INSERT INTO kb_documents (doc_id, collection_name, rel_path, title, content_hash, token_count, indexed_at) VALUES ('doc-1', 'docs', 'notes/migration.md', 'QMD Migration Notes', 'abc', 10, datetime('now'));
+        INSERT INTO kb_chunks (chunk_id, doc_id, collection_name, ordinal, content, token_count, chunk_hash, derivation_depth) VALUES ('chunk-1', 'doc-1', 'docs', 0, 'The qmd migration notes detail the import process.', 10, 'chunk-abc', 0);
+        INSERT INTO recall_events (event_id, conversation_id, chunk_id, injected_score, was_referenced, created_at) VALUES ('evt-1', 'conv-1', 'chunk-1', 0.8, 0, datetime('now'));
+      `);
+
+      const marked = scanResponseForRecallReferences(
+        database.db,
+        "conv-1",
+        "The qmd migration notes explain how the importer handles duplicate runs.",
+      );
+
+      expect(marked).toBe(1);
+      const row = database.db.prepare(
+        "SELECT was_referenced FROM recall_events WHERE event_id = 'evt-1'",
+      ).get() as { was_referenced: number };
+      expect(row.was_referenced).toBe(1);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("does not mark events when the response has no keyword overlap", () => {
+    const root = mkdtempSync(join(tmpdir(), "engram-recall-scan-nomatch-"));
+    tempPaths.push(root);
+    const dbPath = join(root, "engram.db");
+    const database = openDatabase(dbPath);
+    try {
+      database.db.exec(`
+        INSERT INTO kb_collections (name, path, pattern, description, auto_index, fts5_available, created_at) VALUES ('docs', '.', '**/*.md', 'Docs', 0, 0, datetime('now'));
+        INSERT INTO kb_documents (doc_id, collection_name, rel_path, title, content_hash, token_count, indexed_at) VALUES ('doc-1', 'docs', 'notes/compaction.md', 'Compaction Strategy', 'abc', 10, datetime('now'));
+        INSERT INTO kb_chunks (chunk_id, doc_id, collection_name, ordinal, content, token_count, chunk_hash, derivation_depth) VALUES ('chunk-1', 'doc-1', 'docs', 0, 'Compaction merges summaries.', 10, 'chunk-abc', 0);
+        INSERT INTO recall_events (event_id, conversation_id, chunk_id, injected_score, was_referenced, created_at) VALUES ('evt-1', 'conv-1', 'chunk-1', 0.7, 0, datetime('now'));
+      `);
+
+      const marked = scanResponseForRecallReferences(
+        database.db,
+        "conv-1",
+        "The weather is sunny and warm today.",
+      );
+
+      expect(marked).toBe(0);
+      const row = database.db.prepare(
+        "SELECT was_referenced FROM recall_events WHERE event_id = 'evt-1'",
+      ).get() as { was_referenced: number };
+      expect(row.was_referenced).toBe(0);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("returns 0 and skips DB query for empty response text", () => {
+    const root = mkdtempSync(join(tmpdir(), "engram-recall-scan-empty-"));
+    tempPaths.push(root);
+    const dbPath = join(root, "engram.db");
+    const database = openDatabase(dbPath);
+    try {
+      const marked = scanResponseForRecallReferences(database.db, "conv-1", "   ");
+      expect(marked).toBe(0);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("does not re-mark events already flagged as referenced", () => {
+    const root = mkdtempSync(join(tmpdir(), "engram-recall-scan-already-"));
+    tempPaths.push(root);
+    const dbPath = join(root, "engram.db");
+    const database = openDatabase(dbPath);
+    try {
+      database.db.exec(`
+        INSERT INTO kb_collections (name, path, pattern, description, auto_index, fts5_available, created_at) VALUES ('docs', '.', '**/*.md', 'Docs', 0, 0, datetime('now'));
+        INSERT INTO kb_documents (doc_id, collection_name, rel_path, title, content_hash, token_count, indexed_at) VALUES ('doc-1', 'docs', 'notes/migration.md', 'QMD Migration Notes', 'abc', 10, datetime('now'));
+        INSERT INTO kb_chunks (chunk_id, doc_id, collection_name, ordinal, content, token_count, chunk_hash, derivation_depth) VALUES ('chunk-1', 'doc-1', 'docs', 0, 'content', 10, 'chunk-abc', 0);
+        INSERT INTO recall_events (event_id, conversation_id, chunk_id, injected_score, was_referenced, created_at) VALUES ('evt-1', 'conv-1', 'chunk-1', 0.8, 1, datetime('now'));
+      `);
+
+      const marked = scanResponseForRecallReferences(
+        database.db,
+        "conv-1",
+        "The qmd migration notes explain how the importer works.",
+      );
+
+      expect(marked).toBe(0);
+    } finally {
+      database.close();
+    }
+  });
+});
+
+describe("loadFeedbackWeights", () => {
+  it("returns boost multiplier >= 1.0 for chunks referenced at >= 50% rate with >= 3 injections", () => {
+    const root = mkdtempSync(join(tmpdir(), "engram-weights-boost-"));
+    tempPaths.push(root);
+    const dbPath = join(root, "engram.db");
+    const database = openDatabase(dbPath);
+    try {
+      database.db.exec(`
+        INSERT INTO kb_collections (name, path, pattern, description, auto_index, fts5_available, created_at) VALUES ('docs', '.', '**/*.md', 'Docs', 0, 0, datetime('now'));
+        INSERT INTO kb_documents (doc_id, collection_name, rel_path, title, content_hash, token_count, indexed_at) VALUES ('doc-1', 'docs', 'notes/a.md', 'A', 'abc', 5, datetime('now'));
+        INSERT INTO kb_chunks (chunk_id, doc_id, collection_name, ordinal, content, token_count, chunk_hash, derivation_depth) VALUES ('chunk-boost', 'doc-1', 'docs', 0, 'content', 5, 'h1', 0);
+        INSERT INTO recall_events (event_id, conversation_id, chunk_id, injected_score, was_referenced) VALUES
+          ('e1', 'c1', 'chunk-boost', 0.9, 1),
+          ('e2', 'c2', 'chunk-boost', 0.9, 1),
+          ('e3', 'c3', 'chunk-boost', 0.9, 1);
+      `);
+
+      const weights = loadFeedbackWeights(database.db, ["chunk-boost"]);
+      const w = weights.get("chunk-boost") ?? 1.0;
+      expect(w).toBeGreaterThan(1.0);
+      expect(w).toBeLessThanOrEqual(1.5);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("returns demote multiplier < 1.0 for chunks never referenced with >= 5 injections", () => {
+    const root = mkdtempSync(join(tmpdir(), "engram-weights-demote-"));
+    tempPaths.push(root);
+    const dbPath = join(root, "engram.db");
+    const database = openDatabase(dbPath);
+    try {
+      database.db.exec(`
+        INSERT INTO kb_collections (name, path, pattern, description, auto_index, fts5_available, created_at) VALUES ('docs', '.', '**/*.md', 'Docs', 0, 0, datetime('now'));
+        INSERT INTO kb_documents (doc_id, collection_name, rel_path, title, content_hash, token_count, indexed_at) VALUES ('doc-1', 'docs', 'notes/b.md', 'B', 'abc', 5, datetime('now'));
+        INSERT INTO kb_chunks (chunk_id, doc_id, collection_name, ordinal, content, token_count, chunk_hash, derivation_depth) VALUES ('chunk-demote', 'doc-1', 'docs', 0, 'content', 5, 'h2', 0);
+        INSERT INTO recall_events (event_id, conversation_id, chunk_id, injected_score, was_referenced) VALUES
+          ('e1', 'c1', 'chunk-demote', 0.5, 0),
+          ('e2', 'c2', 'chunk-demote', 0.5, 0),
+          ('e3', 'c3', 'chunk-demote', 0.5, 0),
+          ('e4', 'c4', 'chunk-demote', 0.5, 0),
+          ('e5', 'c5', 'chunk-demote', 0.5, 0);
+      `);
+
+      const weights = loadFeedbackWeights(database.db, ["chunk-demote"]);
+      const w = weights.get("chunk-demote") ?? 1.0;
+      expect(w).toBeLessThan(1.0);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("returns neutral weight for chunks with too few events", () => {
+    const root = mkdtempSync(join(tmpdir(), "engram-weights-neutral-"));
+    tempPaths.push(root);
+    const dbPath = join(root, "engram.db");
+    const database = openDatabase(dbPath);
+    try {
+      database.db.exec(`
+        INSERT INTO kb_collections (name, path, pattern, description, auto_index, fts5_available, created_at) VALUES ('docs', '.', '**/*.md', 'Docs', 0, 0, datetime('now'));
+        INSERT INTO kb_documents (doc_id, collection_name, rel_path, title, content_hash, token_count, indexed_at) VALUES ('doc-1', 'docs', 'notes/c.md', 'C', 'abc', 5, datetime('now'));
+        INSERT INTO kb_chunks (chunk_id, doc_id, collection_name, ordinal, content, token_count, chunk_hash, derivation_depth) VALUES ('chunk-neutral', 'doc-1', 'docs', 0, 'content', 5, 'h3', 0);
+        INSERT INTO recall_events (event_id, conversation_id, chunk_id, injected_score, was_referenced) VALUES
+          ('e1', 'c1', 'chunk-neutral', 0.6, 0),
+          ('e2', 'c2', 'chunk-neutral', 0.6, 0);
+      `);
+
+      const weights = loadFeedbackWeights(database.db, ["chunk-neutral"]);
+      expect(weights.get("chunk-neutral")).toBe(1.0);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("returns empty map for empty chunkIds input", () => {
+    const root = mkdtempSync(join(tmpdir(), "engram-weights-empty-"));
+    tempPaths.push(root);
+    const dbPath = join(root, "engram.db");
+    const database = openDatabase(dbPath);
+    try {
+      const weights = loadFeedbackWeights(database.db, []);
+      expect(weights.size).toBe(0);
+    } finally {
+      database.close();
+    }
   });
 });
