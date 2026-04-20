@@ -4,7 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { EngramConfig } from "../config.js";
 import { openDatabase } from "../db/connection.js";
 import { estimateTokens } from "../token-estimate.js";
-import { SESSION_COLLECTION_NAME } from "../kb/indexer.js";
+import { FACTS_COLLECTION_NAME, SESSION_COLLECTION_NAME } from "../kb/indexer.js";
 import { lookupSessionMetadata, searchKnowledgeBase } from "../kb/store.js";
 
 type RecallMemory = {
@@ -181,7 +181,9 @@ export function formatRecallBlock(
       continue;
     }
     const isSession = hit.collectionId === SESSION_COLLECTION_NAME;
-    const sourceKind = isSession ? "session_summary" : "document_derived";
+    const sourceKind = hit.collectionId === FACTS_COLLECTION_NAME
+      ? "explicit_fact"
+      : isSession ? "session_summary" : "document_derived";
     const sessionKeyAttr = hit.sessionKey ? ` session_key="${escapeXml(hit.sessionKey)}"` : "";
     const sessionDateAttr = hit.sessionCreatedAt ? ` session_date="${escapeXml(hit.sessionCreatedAt)}"` : "";
     renderedHits.push([
@@ -236,14 +238,26 @@ export function rankRecallCandidates(
 
 function applySessionLane(
   ranked: RecallCandidate[],
-  config: Pick<EngramConfig, "recallMaxResults" | "recallSessionMaxResults" | "recallSessionMinScore">,
+  config: Pick<EngramConfig, "recallMaxResults" | "recallSessionMaxResults" | "recallSessionMinScore" | "recallFactsMaxResults" | "recallFactsMinScore">,
 ): RecallCandidate[] {
+  // Facts lane runs first — explicit intent beats inferred context
+  const factsHits = ranked
+    .filter((h) => h.collectionId === FACTS_COLLECTION_NAME && h.normalizedScore >= config.recallFactsMinScore)
+    .slice(0, config.recallFactsMaxResults);
+
+  // Session lane fills from remaining slots after facts
+  const remainingAfterFacts = Math.max(0, config.recallMaxResults - factsHits.length);
   const sessionHits = ranked
     .filter((h) => h.collectionId === SESSION_COLLECTION_NAME && h.normalizedScore >= config.recallSessionMinScore)
-    .slice(0, config.recallSessionMaxResults);
-  const mainHits = ranked.filter((h) => h.collectionId !== SESSION_COLLECTION_NAME);
-  const slotsForMain = Math.max(0, config.recallMaxResults - sessionHits.length);
-  return [...sessionHits, ...mainHits.slice(0, slotsForMain)]
+    .slice(0, Math.min(config.recallSessionMaxResults, remainingAfterFacts));
+
+  // Main lane fills whatever slots remain
+  const slotsForMain = Math.max(0, config.recallMaxResults - factsHits.length - sessionHits.length);
+  const mainHits = ranked.filter(
+    (h) => h.collectionId !== SESSION_COLLECTION_NAME && h.collectionId !== FACTS_COLLECTION_NAME,
+  );
+
+  return [...factsHits, ...sessionHits, ...mainHits.slice(0, slotsForMain)]
     .sort((a, b) => b.normalizedScore - a.normalizedScore || b.score - a.score);
 }
 

@@ -4,7 +4,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { EngramConfig } from "../config.js";
 import { openDatabase } from "../db/connection.js";
-import { dropKbCollection, indexAllSummariesIntoKB, indexPath, syncConfiguredCollections } from "../kb/indexer.js";
+import { dropKbCollection, indexAllSummariesIntoKB, indexPath, syncConfiguredCollections, storeExplicitFact, deleteExplicitFact, listExplicitFacts } from "../kb/indexer.js";
 import { getKnowledgeDocument, searchKnowledgeBase } from "../kb/store.js";
 import { formatMigrationReport, runMigration, runMigrationDryRun } from "../migrate/runner.js";
 import { formatDoctorReport, runDoctor } from "./doctor.js";
@@ -184,6 +184,68 @@ async function handleEngramCommand(
     }
   }
 
+  if (command.startsWith("remember ")) {
+    const raw = rawArgs.slice("remember ".length).trim();
+    const { content, replaces } = parseRememberArgs(raw);
+    if (!content) {
+      return { text: "Usage: /engram remember <text> [--replaces <factId>]" };
+    }
+    const database = openDatabase(config.dbPath);
+    try {
+      const result = await storeExplicitFact(database.db, config, { content, replaces });
+      const lines = [`Remembered (ID: ${result.factId}): "${result.label}"` ];
+      if (result.replacedFactId) lines.push(`Replaced: ${result.replacedFactId}`);
+      if (result.conflicts.length > 0) {
+        lines.push(`Warning: similar facts already stored:`);
+        for (const c of result.conflicts) {
+          lines.push(`  - ${c.factId}: "${c.label}" (${(c.similarity * 100).toFixed(0)}% similar)`);
+        }
+      }
+      return { text: lines.join("\n") };
+    } finally {
+      database.close();
+    }
+  }
+
+  if (command.startsWith("forget ")) {
+    const factId = rawArgs.slice("forget ".length).trim();
+    if (!factId) {
+      return { text: "Usage: /engram forget <factId>" };
+    }
+    const database = openDatabase(config.dbPath);
+    try {
+      const deleted = deleteExplicitFact(database.db, factId);
+      return { text: deleted ? `Deleted fact: ${factId}` : `No fact found with ID: ${factId}` };
+    } finally {
+      database.close();
+    }
+  }
+
+  if (command === "review") {
+    const database = openDatabase(config.dbPath);
+    try {
+      const facts = listExplicitFacts(database.db);
+      if (facts.length === 0) {
+        return { text: "No stored facts." };
+      }
+      const now = Date.now();
+      const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+      const lines: string[] = [`Stored facts (${facts.length} total, stalest first):`, ""];
+      for (const fact of facts) {
+        const lastHitMs = fact.lastHitAt ? Date.parse(fact.lastHitAt) : null;
+        const isStale = lastHitMs === null || now - lastHitMs > thirtyDaysMs;
+        const staleTag = isStale ? ` [STALE — last hit: ${fact.lastHitAt ?? "never"}]` : "";
+        lines.push(`${fact.factId}${staleTag}`);
+        lines.push(`  ${fact.content.length > 100 ? fact.content.slice(0, 100) + "..." : fact.content}`);
+        lines.push(`  Stored: ${fact.indexedAt}  Hits: ${fact.hitCount}`);
+        lines.push("");
+      }
+      return { text: lines.join("\n") };
+    } finally {
+      database.close();
+    }
+  }
+
   return {
     text: [
       formatStatus(readStatus(config)),
@@ -192,7 +254,7 @@ async function handleEngramCommand(
       `sessionKey: ${ctx.sessionKey ?? "n/a"}`,
       `kbEnabled: ${config.kbEnabled}`,
       `recallEnabled: ${config.recallEnabled}`,
-      "commands: /engram, /engram doctor, /engram migrate, /engram migrate --dry-run, /engram migrate --resummarize-lcm, /engram migrate --index-summaries, /engram migrate --drop-sessions, /engram search <query>, /engram get <id>, /engram index [path], /engram export [path], /engram compact, /engram maintain",
+      "commands: /engram, /engram doctor, /engram migrate, /engram migrate --dry-run, /engram migrate --resummarize-lcm, /engram migrate --index-summaries, /engram migrate --drop-sessions, /engram search <query>, /engram get <id>, /engram index [path], /engram export [path], /engram compact, /engram maintain, /engram remember <text> [--replaces <id>], /engram forget <factId>, /engram review",
     ].join("\n"),
   };
 }
@@ -229,6 +291,16 @@ function isIsoDate(value: string): boolean {
   }
   const date = new Date(value);
   return !Number.isNaN(date.getTime());
+}
+
+function parseRememberArgs(raw: string): { content: string; replaces?: string } {
+  const replacesMatch = /--replaces\s+(\S+)/.exec(raw);
+  if (replacesMatch) {
+    const replaces = replacesMatch[1];
+    const content = raw.replace(replacesMatch[0], "").trim();
+    return { content, replaces };
+  }
+  return { content: raw };
 }
 
 function truncate(value: string, limit: number = 160): string {

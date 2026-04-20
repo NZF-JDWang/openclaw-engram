@@ -9,8 +9,11 @@ import { syncConfiguredCollections } from "../kb/indexer.js";
 import { createBeforePromptBuildHook } from "./recall.js";
 import {
   createEngramExportTool,
+  createEngramForgetTool,
   createEngramGetTool,
   createEngramIndexTool,
+  createEngramRememberTool,
+  createEngramReviewTool,
   createEngramSearchTool,
   createEngramStatusTool,
 } from "./tools.js";
@@ -49,6 +52,9 @@ export default definePluginEntry({
     api.registerTool(() => createEngramGetTool(config));
     api.registerTool(() => createEngramIndexTool(config));
     api.registerTool(() => createEngramExportTool(config));
+    api.registerTool(() => createEngramRememberTool(config));
+    api.registerTool(() => createEngramForgetTool(config));
+    api.registerTool(() => createEngramReviewTool(config));
     api.on("before_prompt_build", createBeforePromptBuildHook(config));
   },
 });

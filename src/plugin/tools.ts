@@ -1,8 +1,9 @@
 import { Type } from "@sinclair/typebox";
 import type { AnyAgentTool } from "openclaw/plugin-sdk";
 import type { EngramConfig } from "../config.js";
-import { indexPath } from "../kb/indexer.js";
+import { deleteExplicitFact, findConflictingFacts, indexPath, listExplicitFacts, storeExplicitFact } from "../kb/indexer.js";
 import { getKnowledgeDocument, searchKnowledgeBase } from "../kb/store.js";
+import { openDatabase } from "../db/connection.js";
 import { exportMemories } from "./export.js";
 import { formatStatus, readStatus } from "./status.js";
 
@@ -211,6 +212,175 @@ function isIsoDate(value: string): boolean {
   }
   const date = new Date(value);
   return !Number.isNaN(date.getTime());
+}
+
+export function createEngramRememberTool(config: EngramConfig): AnyAgentTool {
+  return {
+    name: "engram_remember",
+    label: "Engram Remember",
+    description: [
+      "Store an explicit fact, preference, or constraint into persistent memory.",
+      "Use this when the user states something that should be recalled in future sessions.",
+      "IMPORTANT: If this fact updates or contradicts something you have previously remembered, pass the old fact's ID in 'replaces'.",
+      "Storing contradicting facts without superseding the old one will cause both to surface in recall.",
+      "Call engram_review to see existing facts before storing new ones on the same topic.",
+    ].join(" "),
+    parameters: Type.Object({
+      content: Type.String({ description: "The fact, preference, or constraint to remember." }),
+      label: Type.Optional(Type.String({ description: "Short descriptive title. Derived from content if omitted." })),
+      replaces: Type.Optional(Type.String({ description: "Fact ID of an older fact this supersedes. Deletes the old fact atomically." })),
+    }),
+    async execute(_toolCallId, input) {
+      try {
+        const content = String(input.content ?? "").trim();
+        if (!content) {
+          return { content: [{ type: "text", text: "content is required." }], details: { error: "empty_content" } };
+        }
+        const label = typeof input.label === "string" && input.label.trim() ? input.label.trim() : undefined;
+        const replaces = typeof input.replaces === "string" && input.replaces.trim() ? input.replaces.trim() : undefined;
+        const database = openDatabase(config.dbPath);
+        try {
+          const result = await storeExplicitFact(database.db, config, { content, label, replaces });
+          const lines: string[] = [`Remembered: "${result.label}" (ID: ${result.factId})`];
+          if (result.replacedFactId) {
+            lines.push(`Replaced: ${result.replacedFactId}`);
+          }
+          if (result.conflicts.length > 0) {
+            lines.push(`Warning: similar facts already stored (consider using 'replaces'):`);
+            for (const conflict of result.conflicts) {
+              lines.push(`  - ${conflict.factId}: "${conflict.label}" (similarity: ${(conflict.similarity * 100).toFixed(0)}%, method: ${conflict.detectionMethod})`);
+            }
+          }
+          return { content: [{ type: "text", text: lines.join("\n") }], details: result };
+        } finally {
+          database.close();
+        }
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: `Remember failed: ${error instanceof Error ? error.message : String(error)}` }],
+          details: { error: String(error) },
+        };
+      }
+    },
+  };
+}
+
+export function createEngramForgetTool(config: EngramConfig): AnyAgentTool {
+  return {
+    name: "engram_forget",
+    label: "Engram Forget",
+    description: "Delete an explicitly stored fact from persistent memory by its fact ID. Get IDs from engram_review.",
+    parameters: Type.Object({
+      factId: Type.String({ description: "The ID of the fact to delete." }),
+    }),
+    async execute(_toolCallId, input) {
+      try {
+        const factId = String(input.factId ?? "").trim();
+        if (!factId) {
+          return { content: [{ type: "text", text: "factId is required." }], details: { error: "empty_id" } };
+        }
+        const database = openDatabase(config.dbPath);
+        try {
+          const deleted = deleteExplicitFact(database.db, factId);
+          return {
+            content: [{ type: "text", text: deleted ? `Deleted fact: ${factId}` : `No fact found with ID: ${factId}` }],
+            details: { factId, deleted },
+          };
+        } finally {
+          database.close();
+        }
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: `Forget failed: ${error instanceof Error ? error.message : String(error)}` }],
+          details: { error: String(error) },
+        };
+      }
+    },
+  };
+}
+
+export function createEngramReviewTool(config: EngramConfig): AnyAgentTool {
+  return {
+    name: "engram_review",
+    label: "Engram Review",
+    description: [
+      "List all explicitly stored facts, sorted stalest first.",
+      "Facts flagged [STALE] have not been recalled in 30+ days.",
+      "Call engram_forget on any stale fact that no longer applies.",
+      "Do not keep facts whose conditions have changed.",
+    ].join(" "),
+    parameters: Type.Object({}),
+    async execute() {
+      try {
+        const database = openDatabase(config.dbPath);
+        try {
+          const facts = listExplicitFacts(database.db);
+          if (facts.length === 0) {
+            return { content: [{ type: "text", text: "No stored facts." }], details: { facts: [] } };
+          }
+          const now = Date.now();
+          const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+          const lines: string[] = [`Stored facts (${facts.length} total, stalest first):`, ""];
+          for (const fact of facts) {
+            const lastHitMs = fact.lastHitAt ? Date.parse(fact.lastHitAt) : null;
+            const isStale = lastHitMs === null || now - lastHitMs > thirtyDaysMs;
+            const staleTag = isStale ? ` [STALE — last hit: ${fact.lastHitAt ?? "never"}]` : "";
+            lines.push(`${fact.factId}${staleTag}`);
+            lines.push(`  Label:   ${fact.label}`);
+            lines.push(`  Content: ${fact.content.length > 120 ? fact.content.slice(0, 120) + "..." : fact.content}`);
+            lines.push(`  Stored:  ${fact.indexedAt}  Hits: ${fact.hitCount}`);
+            lines.push("");
+          }
+          return { content: [{ type: "text", text: lines.join("\n") }], details: { facts } };
+        } finally {
+          database.close();
+        }
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: `Review failed: ${error instanceof Error ? error.message : String(error)}` }],
+          details: { error: String(error) },
+        };
+      }
+    },
+  };
+}
+
+export function createEngramConflictsTool(config: EngramConfig): AnyAgentTool {
+  return {
+    name: "engram_conflicts",
+    label: "Engram Conflicts",
+    description: "Check if a piece of text conflicts with any existing stored facts. Returns similar facts above the similarity threshold.",
+    parameters: Type.Object({
+      content: Type.String({ description: "Text to check for conflicts against stored facts." }),
+    }),
+    async execute(_toolCallId, input) {
+      try {
+        const content = String(input.content ?? "").trim();
+        if (!content) {
+          return { content: [{ type: "text", text: "content is required." }], details: { error: "empty_content" } };
+        }
+        const database = openDatabase(config.dbPath);
+        try {
+          const conflicts = await findConflictingFacts(database.db, config, content);
+          if (conflicts.length === 0) {
+            return { content: [{ type: "text", text: "No conflicting facts found." }], details: { conflicts: [] } };
+          }
+          const lines = [`Found ${conflicts.length} similar fact(s):`, ""];
+          for (const c of conflicts) {
+            lines.push(`${c.factId}: "${c.label}" (similarity: ${(c.similarity * 100).toFixed(0)}%, method: ${c.detectionMethod})`);
+          }
+          return { content: [{ type: "text", text: lines.join("\n") }], details: { conflicts } };
+        } finally {
+          database.close();
+        }
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: `Conflicts check failed: ${error instanceof Error ? error.message : String(error)}` }],
+          details: { error: String(error) },
+        };
+      }
+    },
+  };
 }
 
 function truncate(value: string, limit: number): string {
