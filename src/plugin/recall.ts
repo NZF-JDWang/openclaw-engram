@@ -105,6 +105,7 @@ export function createBeforePromptBuildHook(config: EngramConfig) {
       }
 
       // Apply feedback weights to scores before ranking
+      // Reuse a single DB connection for both weight loading and event logging
       if (config.recallFeedbackEnabled) {
         applyFeedbackWeights(config, allHits);
       }
@@ -134,7 +135,7 @@ export function createBeforePromptBuildHook(config: EngramConfig) {
 
       if (config.recallFeedbackEnabled) {
         const conversationId = resolveRecallSessionKey(event);
-        logRecallEvents(config, conversationId, diversified);
+        logFeedbackInSingleConnection(config, allHits, conversationId, diversified);
       }
 
       return { appendSystemContext };
@@ -315,6 +316,53 @@ function applyFeedbackWeights(config: EngramConfig, hits: RecallMemory[]): void 
   }
 }
 
+/**
+ * Combines feedback weight application and recall event logging into a single
+ * DB connection, avoiding two open/close cycles per prompt build.
+ */
+function logFeedbackInSingleConnection(
+  config: EngramConfig,
+  allHits: RecallMemory[],
+  conversationId: string,
+  candidates: RecallCandidate[],
+): void {
+  if (allHits.length === 0 && candidates.length === 0) return;
+  try {
+    const database = openDatabase(config.dbPath);
+    try {
+      if (allHits.length > 0) {
+        const weights = loadFeedbackWeights(database.db, allHits.map((h) => h.chunkId));
+        for (const hit of allHits) {
+          const weight = weights.get(hit.chunkId);
+          if (weight !== undefined && weight !== 1.0) {
+            hit.score *= weight;
+          }
+        }
+      }
+      if (candidates.length > 0) {
+        const insert = database.db.prepare(
+          `INSERT OR IGNORE INTO recall_events (event_id, conversation_id, chunk_id, injected_score, created_at)
+           VALUES (?, ?, ?, ?, datetime('now'))`,
+        );
+        const now = Date.now();
+        for (let i = 0; i < candidates.length; i += 1) {
+          const candidate = candidates[i]!;
+          insert.run(
+            `re:${candidate.chunkId}:${now}:${i}`,
+            conversationId,
+            candidate.chunkId,
+            candidate.normalizedScore,
+          );
+        }
+      }
+    } finally {
+      database.close();
+    }
+  } catch (error) {
+    console.warn(`[engram] Failed to apply/log feedback: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 export function scanResponseForRecallReferences(
   db: DatabaseSync,
   conversationId: string,
@@ -367,30 +415,6 @@ function isChunkReferencedInResponse(
   if (responseLower.includes(chunkId.toLowerCase())) return true;
   const keywords = extractSignificantKeywords(title);
   return keywords.length >= 2 && keywords.every((kw) => responseLower.includes(kw));
-}
-
-function logRecallEvents(config: EngramConfig, conversationId: string, candidates: RecallCandidate[]): void {
-  try {
-    const database = openDatabase(config.dbPath);
-    try {
-      const insert = database.db.prepare(
-        `INSERT OR IGNORE INTO recall_events (event_id, conversation_id, chunk_id, injected_score, created_at)
-         VALUES (?, ?, ?, ?, datetime('now'))`,
-      );
-      for (const candidate of candidates) {
-        insert.run(
-          `re:${candidate.chunkId}:${Date.now()}`,
-          conversationId,
-          candidate.chunkId,
-          candidate.normalizedScore,
-        );
-      }
-    } finally {
-      database.close();
-    }
-  } catch (error) {
-    console.warn(`[engram] Failed to log recall events: ${error instanceof Error ? error.message : String(error)}`);
-  }
 }
 
 export function shouldInjectRecall(

@@ -62,8 +62,16 @@ export function createEngramSearchTool(config: EngramConfig): AnyAgentTool {
           : [];
         const collection = typeof input.collection === "string" ? input.collection : undefined;
         const minScore = typeof input.minScore === "number" ? input.minScore : 0;
-        const since = typeof input.since === "string" && input.since.trim() ? input.since.trim() : undefined;
-        const until = typeof input.until === "string" && input.until.trim() ? input.until.trim() : undefined;
+        const sinceRaw = typeof input.since === "string" ? input.since.trim() : undefined;
+        const untilRaw = typeof input.until === "string" ? input.until.trim() : undefined;
+        if (sinceRaw && !isIsoDate(sinceRaw)) {
+          return { content: [{ type: "text", text: `Invalid 'since' date: "${sinceRaw}". Expected YYYY-MM-DD.` }], details: { error: "invalid_date" } };
+        }
+        if (untilRaw && !isIsoDate(untilRaw)) {
+          return { content: [{ type: "text", text: `Invalid 'until' date: "${untilRaw}". Expected YYYY-MM-DD.` }], details: { error: "invalid_date" } };
+        }
+        const since = sinceRaw || undefined;
+        const until = untilRaw || undefined;
         const requestedCollections = collections.length > 0 ? collections : collection ? [collection] : [];
         const results = (await searchKnowledgeBase(config, query, {
           limit: requestedCollections.length > 0 ? Math.max(maxResults * 3, maxResults) : maxResults,
@@ -195,6 +203,14 @@ export function createEngramExportTool(config: EngramConfig): AnyAgentTool {
       }
     },
   };
+}
+
+function isIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const date = new Date(value);
+  return !Number.isNaN(date.getTime());
 }
 
 function truncate(value: string, limit: number): string {

@@ -91,7 +91,10 @@ async function handleEngramCommand(
 
   if (command.startsWith("search ")) {
     const query = rawArgs.slice("search ".length).trim();
-    const { query: cleanQuery, since, until } = parseSearchArgs(query);
+    const { query: cleanQuery, since, until, error: dateError } = parseSearchArgs(query);
+    if (dateError) {
+      return { text: dateError };
+    }
     const results = await searchKnowledgeBase(config, cleanQuery, { limit: 5, since, until });
     return {
       text:
@@ -194,7 +197,7 @@ async function handleEngramCommand(
   };
 }
 
-function parseSearchArgs(raw: string): { query: string; since?: string; until?: string } {
+function parseSearchArgs(raw: string): { query: string; since?: string; until?: string; error?: string } {
   let remaining = raw;
   let since: string | undefined;
   let until: string | undefined;
@@ -203,15 +206,29 @@ function parseSearchArgs(raw: string): { query: string; since?: string; until?: 
   if (sinceMatch) {
     since = sinceMatch[1];
     remaining = remaining.replace(sinceMatch[0], "").trim();
+    if (!isIsoDate(since)) {
+      return { query: remaining, error: `Invalid --since date: "${since}". Expected YYYY-MM-DD.` };
+    }
   }
 
   const untilMatch = /--until\s+(\S+)/.exec(remaining);
   if (untilMatch) {
     until = untilMatch[1];
     remaining = remaining.replace(untilMatch[0], "").trim();
+    if (!isIsoDate(until)) {
+      return { query: remaining, error: `Invalid --until date: "${until}". Expected YYYY-MM-DD.` };
+    }
   }
 
   return { query: remaining, since, until };
+}
+
+function isIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const date = new Date(value);
+  return !Number.isNaN(date.getTime());
 }
 
 function truncate(value: string, limit: number = 160): string {

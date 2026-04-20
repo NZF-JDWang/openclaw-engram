@@ -87,6 +87,9 @@ function ensureRecallEventsTable(db: DatabaseSync): void {
       FOREIGN KEY (chunk_id) REFERENCES kb_chunks(chunk_id) ON DELETE CASCADE
     )
   `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_recall_events_conversation_id ON recall_events (conversation_id)
+  `);
 }
 
 function ensureSummaryQualityColumn(db: DatabaseSync): void {

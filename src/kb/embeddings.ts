@@ -34,7 +34,16 @@ export class EmbeddingClient {
   }
 
   private async embedBatch(batch: string[]): Promise<Array<number[] | null>> {
-    const response = await fetch(this.config.embedApiUrl, {
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(this.config.embedApiUrl);
+    } catch {
+      throw new Error(`embedApiUrl is not a valid URL: ${this.config.embedApiUrl}`);
+    }
+    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+      throw new Error(`embedApiUrl must use http or https (got ${parsedUrl.protocol})`);
+    }
+    const response = await fetch(parsedUrl.toString(), {
       method: "POST",
       headers: {
         "content-type": "application/json",
