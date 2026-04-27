@@ -429,15 +429,28 @@ function ensureCollection(
 }
 
 async function listIndexableFiles(rootPath: string): Promise<string[]> {
-  const entries = await readdir(rootPath, { withFileTypes: true, recursive: true });
   const files: string[] = [];
-  for (const entry of entries) {
-    if (!entry.isFile()) {
+  const stack: string[] = [rootPath];
+
+  while (stack.length > 0) {
+    const currentPath = stack.pop();
+    if (!currentPath) {
       continue;
     }
-    const parentPath = "path" in entry && typeof entry.path === "string" ? entry.path : rootPath;
-    files.push(resolve(parentPath, entry.name));
+
+    const entries = await readdir(currentPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = resolve(currentPath, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+        continue;
+      }
+      if (entry.isFile()) {
+        files.push(fullPath);
+      }
+    }
   }
+
   return files;
 }
 
