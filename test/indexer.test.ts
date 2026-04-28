@@ -6,7 +6,7 @@ import { resolveEngramConfig } from "../src/config.js";
 import { openDatabase } from "../src/db/connection.js";
 import { EngramContextEngine } from "../src/engine/engine.js";
 import { dropKbCollection, indexAllSummariesIntoKB, indexPath, indexSessionSummaryById, SESSION_COLLECTION_NAME, syncConfiguredCollections } from "../src/kb/indexer.js";
-import { searchKnowledgeBase } from "../src/kb/store.js";
+import { getKnowledgeDocument, searchKnowledgeBase } from "../src/kb/store.js";
 
 const tempPaths: string[] = [];
 
@@ -181,6 +181,53 @@ describe("kb indexer", () => {
     expect(result.collections[0]?.indexedDocuments).toBe(1);
     expect(hits).toHaveLength(1);
     expect(hits[0]?.relPath).toBe("guide.md");
+  });
+
+  it("supports pointer-only indexing for configured KB collections", async () => {
+    const root = mkdtempSync(join(tmpdir(), "engram-indexer-pointer-"));
+    tempPaths.push(root);
+    const docsDir = join(root, "vault");
+    mkdirSync(docsDir);
+    writeFileSync(
+      join(docsDir, "Supplement Stack.md"),
+      [
+        "---",
+        "tags:",
+        "  - supplements",
+        "  - health",
+        "summary: Creatine and magnesium notes for day-to-day health tracking.",
+        "---",
+        "# Supplement Stack",
+        "",
+        "Creatine monohydrate helps keep my routine consistent.",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const dbPath = join(root, "engram.db");
+    const config = resolveEngramConfig({
+      dbPath,
+      kbCollections: [
+        {
+          name: "vault",
+          path: docsDir,
+          pattern: "**/*.md",
+          indexMode: "pointer",
+          recallWeight: 1.5,
+        },
+      ],
+    });
+
+    const result = await syncConfiguredCollections(config);
+    const hits = await searchKnowledgeBase(config, "I started taking some new supplements for my health", { limit: 5 });
+    const document = getKnowledgeDocument(config, hits[0]?.docId ?? "");
+
+    expect(result.collections[0]?.indexedDocuments).toBe(1);
+    expect(result.collections[0]?.indexedChunks).toBe(1);
+    expect(hits[0]?.collectionName).toBe("vault");
+    expect(hits[0]?.content).toContain("Summary: Creatine and magnesium notes");
+    expect(hits[0]?.content).toContain("Tags: supplements, health");
+    expect(document?.content).toContain("Creatine monohydrate helps keep my routine consistent.");
   });
 
   it("skips indexing summary-of-summary artifacts when the circuit breaker is enabled", async () => {

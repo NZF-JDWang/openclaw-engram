@@ -103,6 +103,40 @@ describe("knowledge base store", () => {
     expect(results[1]?.memoryClass).toBe('task');
   });
 
+  it("applies configured recallWeight to boost a KB collection", async () => {
+    const root = mkdtempSync(join(tmpdir(), "engram-kb-weight-"));
+    tempPaths.push(root);
+    const dbPath = join(root, "engram.db");
+    const database = openDatabase(dbPath);
+    try {
+      database.db.exec(`
+        INSERT INTO kb_collections (name, path, pattern, created_at) VALUES
+          ('vault', 'C:/vault', '**/*.md', datetime('now')),
+          ('notes', 'C:/notes', '**/*.md', datetime('now'));
+        INSERT INTO kb_documents (doc_id, collection_name, rel_path, title, content_hash, token_count, indexed_at) VALUES
+          ('doc-1', 'vault', 'supplement-stack.md', 'Supplement Stack', 'hash-1', 10, datetime('now')),
+          ('doc-2', 'notes', 'misc.md', 'Misc Notes', 'hash-2', 10, datetime('now'));
+        INSERT INTO kb_chunks (chunk_id, doc_id, collection_name, ordinal, content, token_count, chunk_hash, derivation_depth) VALUES
+          ('chunk-1', 'doc-1', 'vault', 0, 'creatine supplements health routine', 10, 'hash-1', 0),
+          ('chunk-2', 'doc-2', 'notes', 0, 'creatine supplements health routine', 10, 'hash-2', 0);
+      `);
+    } finally {
+      database.close();
+    }
+
+    const config = resolveEngramConfig({
+      dbPath,
+      kbCollections: [
+        { name: 'vault', path: 'C:/vault', pattern: '**/*.md', recallWeight: 2 },
+        { name: 'notes', path: 'C:/notes', pattern: '**/*.md' },
+      ],
+    });
+    const results = await searchKnowledgeBase(config, 'I started taking some new supplements for my health', { limit: 2 });
+
+    expect(results[0]?.collectionName).toBe('vault');
+    expect(results[0]?.score).toBeGreaterThan(results[1]?.score ?? 0);
+  });
+
   it("uses stored embeddings to rerank lexical candidates when embedding search is enabled", async () => {
     const root = mkdtempSync(join(tmpdir(), "engram-kb-embed-rank-"));
     tempPaths.push(root);

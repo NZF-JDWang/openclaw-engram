@@ -1,5 +1,6 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import { resolve } from "node:path";
 import type { EngramConfig } from "../config.js";
 import { EmbeddingClient, decodeEmbedding } from "./embeddings.js";
 
@@ -112,13 +113,13 @@ export function getKnowledgeDocument(config: EngramConfig, idOrPath: string): KB
       }
       return {
         ...chunk,
-        content: fetchDocumentContent(db, chunk.docId),
+        content: resolveDocumentContent(config, db, chunk.collectionName, chunk.relPath, chunk.docId),
       };
     }
 
     return {
       ...document,
-      content: fetchDocumentContent(db, document.docId),
+      content: resolveDocumentContent(config, db, document.collectionName, document.relPath, document.docId),
     };
   } finally {
     db.close();
@@ -174,7 +175,7 @@ export function getKnowledgeDocumentByLocation(  config: EngramConfig,
 
     return {
       ...document,
-      content: fetchDocumentContent(db, document.docId),
+      content: resolveDocumentContent(config, db, document.collectionName, document.relPath, document.docId),
     };
   } finally {
     db.close();
@@ -424,6 +425,27 @@ function fetchDocumentContent(db: DatabaseSync, docId: string): string {
   return chunks.map((row) => row.content).join("\n\n");
 }
 
+function resolveDocumentContent(
+  config: EngramConfig,
+  db: DatabaseSync,
+  collectionName: string,
+  relPath: string,
+  docId: string,
+): string {
+  const sourcePath = resolvePointerSourcePath(config, collectionName, relPath);
+  if (sourcePath && existsSync(sourcePath)) {
+    try {
+      const content = readFileSync(sourcePath, "utf8");
+      if (!content.includes("\u0000")) {
+        return content;
+      }
+    } catch {
+      // Fall back to stored chunk text.
+    }
+  }
+  return fetchDocumentContent(db, docId);
+}
+
 function tokenize(value: string): string[] {
   return value
     .toLowerCase()
@@ -437,7 +459,7 @@ function computeScore(
   row: { relPath: string; title: string; content: string; collectionName?: string; indexedAt: string; derivationDepth: number },
   tokens: string[],
   query: string,
-  config: Pick<EngramConfig, "recallKeywordBypassMinLength" | "recallKeywordBypassMaxTerms">,
+  config: Pick<EngramConfig, "kbCollections" | "recallKeywordBypassMinLength" | "recallKeywordBypassMaxTerms">,
 ): number {
   const content = row.content.toLowerCase();
   const title = row.title.toLowerCase();
@@ -453,11 +475,21 @@ function computeScore(
   const exactMatch = tokens.join(" ").trim();
   const exactBoost = exactMatch && (content.includes(exactMatch) || title.includes(exactMatch) || relPath.includes(exactMatch)) ? 1.25 : 1;
   const bypassDecay = matchesKeywordBypass([content, title, relPath].join(" "), query, config);
-  return rawScore * exactBoost * collectionWeight(row.collectionName) * derivationWeight(row.derivationDepth) * (bypassDecay ? 1 : decayWeight(row.indexedAt, row.collectionName));
+  return rawScore * exactBoost * collectionWeight(config, row.collectionName) * derivationWeight(row.derivationDepth) * (bypassDecay ? 1 : decayWeight(row.indexedAt, row.collectionName));
 }
 
-function collectionWeight(collectionName?: string): number {
-  return collectionName === "__sessions" ? 0.7 : 1;
+function collectionWeight(
+  config: Pick<EngramConfig, "kbCollections">,
+  collectionName?: string,
+): number {
+  if (!collectionName) {
+    return 1;
+  }
+  if (collectionName === "__sessions") {
+    return 0.7;
+  }
+  const configured = config.kbCollections.find((collection) => normalizeCollectionName(collection.name) === collectionName);
+  return configured?.recallWeight ?? 1;
 }
 
 function derivationWeight(derivationDepth: number): number {
@@ -555,7 +587,9 @@ async function rerankWithEmbeddings(
       const semanticRank = semanticRanks.get(row.chunkId);
       return {
         ...row,
-        score: rrfScore(lexicalRank, config.recallRrfK) + rrfScore(semanticRank, config.recallRrfK),
+        score:
+          (rrfScore(lexicalRank, config.recallRrfK) + rrfScore(semanticRank, config.recallRrfK))
+          * collectionWeight(config, row.collectionName),
         semanticScore: semanticScores.get(row.chunkId) ?? 0,
       };
     })
@@ -598,6 +632,24 @@ function matchesKeywordBypass(
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function resolvePointerSourcePath(
+  config: Pick<EngramConfig, "kbCollections">,
+  collectionName: string,
+  relPath: string,
+): string | null {
+  const collection = config.kbCollections.find(
+    (entry) => normalizeCollectionName(entry.name) === collectionName && entry.indexMode === "pointer",
+  );
+  if (!collection) {
+    return null;
+  }
+  return resolve(collection.path, relPath);
+}
+
+function normalizeCollectionName(value: string): string {
+  return value.trim().replace(/[^a-z0-9_-]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase() || "manual";
 }
 
 function deriveMemoryClass(collectionName: string): "task" | "reference" {

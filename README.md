@@ -18,6 +18,7 @@ No external services required. No separate databases to manage. One plugin, one 
 - Runtime-backed leaf and condensed compaction when plugin runtime subagents are available, with deterministic fallback and `summary_parents` lineage
 - Searchable KB indexing for files, directories, and compacted session summaries
 - Configured KB collections can be synced automatically on plugin startup
+- Configured KB collections can opt into pointer-only indexing for metadata-dense recall without storing full note bodies in KB chunks
 - Incremental KB sync — only re-indexes files that changed since the last sync
 - Optional embedding generation and `kb_embeddings` storage during indexing
 - Persona file injection via `prependSystemContext`
@@ -76,6 +77,8 @@ Supported plugin config keys:
 - `summarizationModel`
 - `kbEnabled`
 - `kbCollections`
+- `kbCollections[].indexMode` (`full` or `pointer`)
+- `kbCollections[].recallWeight`
 - `kbAutoIndexSessions`
 - `kbSessionIndexCircuitBreaker`
 - `kbAutoIndexOnStart`
@@ -153,7 +156,9 @@ Important logical areas inside the database:
 - Temporal filtering constrains results by date range when `--since`/`--until` are provided or temporal phrases are detected in the query
 - Keyword bypass matches skip temporal decay for always-relevant terms
 - Configured collection sync respects each collection's declared glob pattern; incremental sync skips unchanged files
+- Pointer-mode collections index a single metadata chunk built from title, path, summary, and tags; `engram_get` falls back to the source file on disk for full content
 - Session-summary chunks in `__sessions` are ranked below primary documents in general search, but get a dedicated recall lane with separate scoring
+- Collection-level recall weights can boost curated KB collections above generic sources when queries are conversational
 - Retrieval applies temporal decay by memory type
 - The recall hook suppresses trivial prompts and snippets already present in recent non-user context
 - When recall feedback is enabled, the afterTurn hook scans the assistant response for references to injected chunks and updates `was_referenced`; a maintenance job analyzes accumulated feedback to adjust future recall ranking

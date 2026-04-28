@@ -8,6 +8,8 @@ export const EngramKbCollectionSchema = Type.Object({
   path: Type.String({ minLength: 1 }),
   pattern: Type.String({ minLength: 1 }),
   description: Type.Optional(Type.String()),
+  indexMode: Type.Optional(Type.Union([Type.Literal("full"), Type.Literal("pointer") ])),
+  recallWeight: Type.Optional(Type.Number({ minimum: 0 })),
 });
 
 export const EngramConfigSchema = Type.Object({
@@ -117,6 +119,8 @@ export type EngramKbCollection = {
   path: string;
   pattern: string;
   description?: string;
+  indexMode?: "full" | "pointer";
+  recallWeight?: number;
 };
 
 const DEFAULTS = {
@@ -197,8 +201,18 @@ function pickCollections(record: Record<string, unknown>, key: string): EngramKb
       path: pickString(entry, "path") || "",
       pattern: pickString(entry, "pattern") || "",
       description: pickString(entry, "description"),
+      indexMode: pickCollectionIndexMode(entry),
+      recallWeight: typeof entry.recallWeight === "number" && Number.isFinite(entry.recallWeight)
+        ? Math.max(0, entry.recallWeight)
+        : undefined,
     }))
     .filter((entry) => entry.name && entry.path && entry.pattern);
+}
+
+function pickCollectionIndexMode(record: Record<string, unknown>): EngramKbCollection["indexMode"] {
+  return record.indexMode === "pointer" || record.indexMode === "full"
+    ? record.indexMode
+    : undefined;
 }
 
 export function defaultDbPath(env: NodeJS.ProcessEnv = process.env): string {

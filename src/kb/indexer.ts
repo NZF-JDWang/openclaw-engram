@@ -71,6 +71,8 @@ export type StoreExplicitFactResult = {
   conflicts: ConflictHint[];
 };
 
+type IndexMode = "full" | "pointer";
+
 type UpsertDocumentResult = {
   chunkCount: number;
   chunks: Array<{ chunkId: string; text: string }>;
@@ -127,11 +129,13 @@ async function indexResolvedCollection(
   const stats = statSync(resolvedPath);
   const rootPath = stats.isDirectory() ? resolvedPath : resolve(resolvedPath, "..");
   const files = stats.isDirectory() ? await listIndexableFiles(resolvedPath) : [resolvedPath];
+  const normalizedCollectionName = normalizeCollectionName(params.name);
+  const indexMode = params.indexMode ?? "full";
   const database = openDatabase(config.dbPath);
   const embeddingClient = new EmbeddingClient(config);
   try {
     ensureCollection(database.db, {
-      name: normalizeCollectionName(params.name),
+      name: normalizedCollectionName,
       path: params.path,
       pattern: params.pattern,
       description: params.description ?? "Configured Engram collection",
@@ -158,14 +162,22 @@ async function indexResolvedCollection(
         continue;
       }
       knownRelPaths.add(relPath);
-      if (isDocumentUnchanged(database.db, normalizeCollectionName(params.name), relPath, content)) {
+      if (isDocumentUnchanged(database.db, normalizedCollectionName, relPath, content)) {
         continue;
       }
-      const upserted = upsertDocument(database.db, {
-        collectionName: normalizeCollectionName(params.name),
-        relPath,
+      const indexedDocument = buildIndexedDocument({
         title: deriveTitle(filePath),
-        content,
+        relPath,
+        filePath,
+        sourceContent: content,
+        indexMode,
+      });
+      const upserted = upsertDocument(database.db, {
+        collectionName: normalizedCollectionName,
+        relPath,
+        title: indexedDocument.title,
+        content: indexedDocument.content,
+        contentHash: hash(content),
       });
       await storeEmbeddings(database.db, embeddingClient, config, upserted.chunks);
       indexedDocuments += 1;
@@ -173,11 +185,11 @@ async function indexResolvedCollection(
     }
 
     if (config.kbIncrementalSync && stats.isDirectory()) {
-      pruneStaleDocuments(database.db, normalizeCollectionName(params.name), knownRelPaths);
+      pruneStaleDocuments(database.db, normalizedCollectionName, knownRelPaths);
     }
 
     return {
-      collectionName: normalizeCollectionName(params.name),
+      collectionName: normalizedCollectionName,
       indexedDocuments,
       indexedChunks,
       skippedFiles,
@@ -340,12 +352,13 @@ function upsertDocument(
     relPath: string;
     title: string;
     content: string;
+    contentHash?: string;
     docId?: string;
     derivationDepth?: number;
   },
 ): UpsertDocumentResult {
   const docId = params.docId ?? `doc:${hash(`${params.collectionName}\0${params.relPath}`)}`;
-  const contentHash = hash(params.content);
+  const contentHash = params.contentHash ?? hash(params.content);
   const tokenCount = estimateTokens(params.content);
   const chunks = chunkDocument(params.content);
   const indexedChunks: Array<{ chunkId: string; text: string }> = [];
@@ -472,6 +485,98 @@ function readTextFile(filePath: string): string {
 
 function deriveTitle(filePath: string): string {
   return basename(filePath, extname(filePath)) || basename(filePath);
+}
+
+function buildIndexedDocument(params: {
+  title: string;
+  relPath: string;
+  filePath: string;
+  sourceContent: string;
+  indexMode: IndexMode;
+}): { title: string; content: string } {
+  if (params.indexMode !== "pointer") {
+    return {
+      title: params.title,
+      content: params.sourceContent,
+    };
+  }
+
+  const pointer = buildPointerContent(params.title, params.relPath, params.filePath, params.sourceContent);
+  return {
+    title: params.title,
+    content: pointer,
+  };
+}
+
+function buildPointerContent(title: string, relPath: string, filePath: string, sourceContent: string): string {
+  const parsed = parseFrontmatter(sourceContent);
+  const summary = parsed.summary ?? deriveSummaryLine(parsed.body);
+  const lines = [
+    `Title: ${title}`,
+    `Path: ${normalizeRelPath(relPath)}`,
+    summary ? `Summary: ${summary}` : "",
+    parsed.tags.length > 0 ? `Tags: ${parsed.tags.join(", ")}` : "",
+    `Pointer: Read ${basename(filePath)} from disk for full note contents when this hit looks relevant.`,
+  ].filter((line) => line.length > 0);
+  return lines.join("\n");
+}
+
+function parseFrontmatter(sourceContent: string): { body: string; summary?: string; tags: string[] } {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/u.exec(sourceContent);
+  if (!match) {
+    return { body: sourceContent, tags: [] };
+  }
+
+  const frontmatter = match[1] ?? "";
+  const body = match[2] ?? "";
+  const tags = extractFrontmatterTags(frontmatter);
+  const summary = extractFrontmatterScalar(frontmatter, "summary") ?? extractFrontmatterScalar(frontmatter, "description");
+  return { body, summary, tags };
+}
+
+function extractFrontmatterScalar(frontmatter: string, key: string): string | undefined {
+  const match = new RegExp(`^${key}:\\s*(.+)$`, "im").exec(frontmatter);
+  if (!match) {
+    return undefined;
+  }
+  return cleanMetadataValue(match[1]);
+}
+
+function extractFrontmatterTags(frontmatter: string): string[] {
+  const inlineMatch = /^tags:\s*\[(.+)\]\s*$/im.exec(frontmatter);
+  if (inlineMatch) {
+    return inlineMatch[1]
+      .split(",")
+      .map((tag) => cleanMetadataValue(tag))
+      .filter((tag) => tag.length > 0);
+  }
+
+  const blockMatch = /^tags:\s*\r?\n((?:\s*-\s*.+\r?\n?)*)/im.exec(frontmatter);
+  if (!blockMatch) {
+    return [];
+  }
+  return blockMatch[1]
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*-\s*/, "").trim())
+    .map((tag) => cleanMetadataValue(tag))
+    .filter((tag) => tag.length > 0);
+}
+
+function cleanMetadataValue(value: string | undefined): string {
+  return (value ?? "").trim().replace(/^['\"]|['\"]$/g, "");
+}
+
+function deriveSummaryLine(body: string): string | undefined {
+  const lines = body
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .filter((line) => !line.startsWith("#"));
+  const candidate = lines.find((line) => /[a-z0-9]/i.test(line));
+  if (!candidate) {
+    return undefined;
+  }
+  return candidate.length <= 220 ? candidate : `${candidate.slice(0, 217)}...`;
 }
 
 function normalizeCollectionName(value: string): string {

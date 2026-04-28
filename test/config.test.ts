@@ -60,6 +60,8 @@ describe("resolveEngramConfig", () => {
           path: "/tmp/docs",
           pattern: "**/*.md",
           description: "Project docs",
+          indexMode: "pointer",
+          recallWeight: 1.8,
         },
       ],
       kbAutoIndexOnStart: true,
@@ -74,6 +76,8 @@ describe("resolveEngramConfig", () => {
 
     expect(config.kbCollections).toHaveLength(1);
     expect(config.kbCollections[0]?.name).toBe("docs");
+    expect(config.kbCollections[0]?.indexMode).toBe("pointer");
+    expect(config.kbCollections[0]?.recallWeight).toBe(1.8);
     expect(config.kbAutoIndexOnStart).toBe(true);
     expect(config.kbAutoIndexSessions).toBe(false);
     expect(config.kbSessionIndexCircuitBreaker).toBe(false);
