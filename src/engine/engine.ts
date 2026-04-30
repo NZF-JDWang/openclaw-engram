@@ -181,9 +181,11 @@ export class EngramContextEngine implements ContextEngine {
   }
 
   async compact(_: { sessionId: string; tokenBudget?: number }): Promise<CompactResult> {
+    const freshTailCountOverride = Math.max(1, Math.min(this.config.freshTailCount, 2));
     const result = await compactConversation(this.database.db, {
       conversationId: _.sessionId,
       freshTailCount: this.config.freshTailCount,
+      freshTailCountOverride,
       targetTokens: this.config.leafTargetTokens,
       condensedTargetTokens: this.config.condensedTargetTokens,
       incrementalMaxDepth: this.config.compactionMaxDepth ?? this.config.incrementalMaxDepth,

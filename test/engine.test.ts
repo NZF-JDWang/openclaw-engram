@@ -45,6 +45,45 @@ describe("EngramContextEngine", () => {
     }
   });
 
+  it("manual compaction uses a smaller protected tail than afterTurn compaction", async () => {
+    const root = mkdtempSync(join(tmpdir(), "engram-engine-manual-compact-"));
+    tempPaths.push(root);
+    const dbPath = join(root, "engram.db");
+    const database = openDatabase(dbPath);
+    const config = resolveEngramConfig({ dbPath, freshTailCount: 8, leafTargetTokens: 20, condensedTargetTokens: 20 });
+    const engine = new EngramContextEngine(database, config);
+    try {
+      database.db.exec(`INSERT INTO conversations (conversation_id, session_id, session_key, created_at) VALUES ('c1', 'c1', 'k1', datetime('now'));`);
+      for (let index = 0; index < 9; index += 1) {
+        database.db.prepare(`
+          INSERT INTO messages (message_id, conversation_id, seq, role, content, token_count, created_at)
+          VALUES (?, 'c1', ?, 'user', ?, 100, datetime('now'))
+        `).run(`m${index}`, index, `message ${index}`);
+        database.db.prepare(`
+          INSERT INTO context_items (conversation_id, ordinal, item_type, message_id, summary_id, created_at)
+          VALUES ('c1', ?, 'message', ?, NULL, datetime('now'))
+        `).run(index, `m${index}`);
+      }
+
+      const result = await engine.compact({ sessionId: 'c1' });
+      const contextItems = database.db.prepare(`
+        SELECT item_type, message_id, summary_id
+        FROM context_items
+        WHERE conversation_id = 'c1'
+        ORDER BY ordinal ASC
+      `).all() as Array<{ item_type: string; message_id: string | null; summary_id: string | null }>;
+      const details = result.result?.details as { replacedItems?: number } | undefined;
+
+      expect(result.compacted).toBe(true);
+      expect(details?.replacedItems).toBe(7);
+      expect(contextItems).toHaveLength(3);
+      expect(contextItems[0]?.item_type).toBe('summary');
+      expect(contextItems.slice(1).map((item) => item.message_id)).toEqual(['m7', 'm8']);
+    } finally {
+      await engine.dispose();
+    }
+  });
+
   it("afterTurn scans the assistant response and marks recall events as referenced", async () => {
     const root = mkdtempSync(join(tmpdir(), "engram-engine-feedback-"));
     tempPaths.push(root);

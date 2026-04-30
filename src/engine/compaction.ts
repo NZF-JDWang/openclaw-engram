@@ -56,6 +56,7 @@ export async function compactConversation(
   params: {
     conversationId: string;
     freshTailCount: number;
+    freshTailCountOverride?: number;
     targetTokens: number;
     condensedTargetTokens?: number;
     incrementalMaxDepth?: number;
@@ -67,7 +68,7 @@ export async function compactConversation(
   const leaf = await compactLeafWindow(
     db,
     params.conversationId,
-    params.freshTailCount,
+    params.freshTailCountOverride ?? params.freshTailCount,
     params.targetTokens,
     params.summaryQualityThreshold ?? 50,
     params.summarize,
