@@ -57,4 +57,29 @@ describe("EmbeddingClient", () => {
     const bytes = encodeEmbedding([1.5, -2]);
     expect(bytes.byteLength).toBe(8);
   });
+
+  it("passes an abort signal through to fetch", async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => ({
+      ok: true,
+      json: async () => ({ data: [{ embedding: [0.1, 0.2] }] }),
+      signal: init?.signal,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new EmbeddingClient({
+      embedEnabled: true,
+      embedApiUrl: "http://localhost:11434/v1/embeddings",
+      embedApiModel: "nomic-embed-text",
+      embedApiKey: undefined,
+      embedBatchSize: 2,
+    });
+
+    const controller = new AbortController();
+    await client.embed(["hello"], { signal: controller.signal });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:11434/v1/embeddings",
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
 });

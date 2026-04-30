@@ -221,7 +221,14 @@ describe("knowledge base store", () => {
       database.close();
     }
 
-    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => undefined)));
+    vi.stubGlobal("fetch", vi.fn((_url: string, init?: RequestInit) => new Promise((_resolve, reject) => {
+      const signal = init?.signal as AbortSignal | undefined;
+      signal?.addEventListener("abort", () => {
+        const error = new Error("aborted");
+        error.name = "AbortError";
+        reject(error);
+      }, { once: true });
+    })));
 
     const config = resolveEngramConfig({
       dbPath,
@@ -236,6 +243,50 @@ describe("knowledge base store", () => {
     expect(results).toHaveLength(2);
     expect(results[0]?.chunkId).toBe("chunk-1");
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("vector reranking exceeded timeout budget"));
+    vi.useRealTimers();
+  });
+
+  it("aborts the embedding request when vector reranking exceeds the timeout budget", async () => {
+    vi.useFakeTimers();
+
+    const root = mkdtempSync(join(tmpdir(), "engram-kb-timeout-abort-"));
+    tempPaths.push(root);
+    const dbPath = join(root, "engram.db");
+    const database = openDatabase(dbPath);
+    try {
+      database.db.exec(`
+        INSERT INTO kb_collections (name, path, pattern, created_at) VALUES ('docs', 'C:/docs', '**/*.md', datetime('now'));
+        INSERT INTO kb_documents (doc_id, collection_name, rel_path, title, content_hash, token_count, indexed_at) VALUES
+          ('doc-1', 'docs', 'alpha.md', 'Alpha', 'hash-1', 10, datetime('now'));
+        INSERT INTO kb_chunks (chunk_id, doc_id, collection_name, ordinal, content, token_count, chunk_hash, derivation_depth) VALUES
+          ('chunk-1', 'doc-1', 'docs', 0, 'sqlite architecture alpha signal', 10, 'hash-1', 0);
+      `);
+    } finally {
+      database.close();
+    }
+
+    let observedSignal: AbortSignal | undefined;
+    vi.stubGlobal("fetch", vi.fn((_url: string, init?: RequestInit) => {
+      observedSignal = init?.signal as AbortSignal | undefined;
+      return new Promise((_resolve, reject) => {
+        observedSignal?.addEventListener("abort", () => {
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          reject(error);
+        }, { once: true });
+      });
+    }));
+
+    const pending = searchKnowledgeBase(resolveEngramConfig({
+      dbPath,
+      embedEnabled: true,
+      kbSearchTimeoutMs: 5,
+    }), "sqlite architecture", { limit: 1 });
+
+    await vi.advanceTimersByTimeAsync(10);
+    await pending;
+
+    expect(observedSignal?.aborted).toBe(true);
     vi.useRealTimers();
   });
 

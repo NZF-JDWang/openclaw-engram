@@ -3,7 +3,7 @@ import type { EngramConfig } from "../config.js";
 export class EmbeddingClient {
   constructor(private readonly config: Pick<EngramConfig, "embedEnabled" | "embedApiUrl" | "embedApiModel" | "embedApiKey" | "embedBatchSize">) {}
 
-  async embed(texts: string[]): Promise<Array<number[] | null>> {
+  async embed(texts: string[], options: { signal?: AbortSignal } = {}): Promise<Array<number[] | null>> {
     if (!this.config.embedEnabled) {
       return texts.map(() => null);
     }
@@ -14,18 +14,21 @@ export class EmbeddingClient {
     const results: Array<number[] | null> = [];
     for (let index = 0; index < texts.length; index += this.config.embedBatchSize) {
       const batch = texts.slice(index, index + this.config.embedBatchSize);
-      const embeddedBatch = await this.embedBatchWithRetry(batch);
+      const embeddedBatch = await this.embedBatchWithRetry(batch, options.signal);
       results.push(...embeddedBatch);
     }
     return results;
   }
 
-  private async embedBatchWithRetry(batch: string[]): Promise<Array<number[] | null>> {
+  private async embedBatchWithRetry(batch: string[], signal?: AbortSignal): Promise<Array<number[] | null>> {
     let lastError: unknown = null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
-        return await this.embedBatch(batch);
+        return await this.embedBatch(batch, signal);
       } catch (error) {
+        if (isAbortError(error)) {
+          throw error;
+        }
         lastError = error;
       }
     }
@@ -33,7 +36,7 @@ export class EmbeddingClient {
     return batch.map(() => null);
   }
 
-  private async embedBatch(batch: string[]): Promise<Array<number[] | null>> {
+  private async embedBatch(batch: string[], signal?: AbortSignal): Promise<Array<number[] | null>> {
     let parsedUrl: URL;
     try {
       parsedUrl = new URL(this.config.embedApiUrl);
@@ -49,6 +52,7 @@ export class EmbeddingClient {
         "content-type": "application/json",
         ...(this.config.embedApiKey ? { authorization: `Bearer ${this.config.embedApiKey}` } : {}),
       },
+      signal,
       body: JSON.stringify({
         model: this.config.embedApiModel,
         input: batch,
@@ -89,4 +93,8 @@ export function decodeEmbedding(value: Uint8Array | ArrayBuffer, dimensions?: nu
     vector.push(view.getFloat32(index * 4, true));
   }
   return vector;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }

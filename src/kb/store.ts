@@ -665,16 +665,21 @@ async function embedQueryWithBudget(
   query: string,
   remainingBudgetMs: number,
 ): Promise<number[] | null> {
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), remainingBudgetMs);
+  if (typeof timeoutHandle === "object" && timeoutHandle && "unref" in timeoutHandle && typeof timeoutHandle.unref === "function") {
+    timeoutHandle.unref();
+  }
   try {
-    const result = await Promise.race([
-      new EmbeddingClient(config).embed([query]).then((vectors) => vectors[0] ?? null),
-      new Promise<null>((resolve) => {
-        const handle = setTimeout(() => resolve(null), remainingBudgetMs);
-        if (typeof handle === "object" && handle && "unref" in handle && typeof handle.unref === "function") {
-          handle.unref();
+    const result = await new EmbeddingClient(config)
+      .embed([query], { signal: controller.signal })
+      .then((vectors) => vectors[0] ?? null)
+      .catch((error: unknown) => {
+        if (error instanceof Error && error.name === "AbortError") {
+          return null;
         }
-      }),
-    ]);
+        throw error;
+      });
     if (!result && config.embedEnabled) {
       warnSearchTimeout(
         `KB vector reranking exceeded timeout budget (${remainingBudgetMs}ms); using lexical results only.`,
@@ -685,6 +690,8 @@ async function embedQueryWithBudget(
     const message = error instanceof Error ? error.message : String(error);
     warnSearchTimeout(`KB vector reranking failed: ${message}. Using lexical results only.`);
     return null;
+  } finally {
+    clearTimeout(timeoutHandle);
   }
 }
 
