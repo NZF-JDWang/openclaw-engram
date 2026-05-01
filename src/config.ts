@@ -20,6 +20,7 @@ export const EngramConfigSchema = Type.Object({
   summarizationModel: Type.Optional(Type.String()),
   kbEnabled: Type.Optional(Type.Boolean()),
   kbCollections: Type.Optional(Type.Array(EngramKbCollectionSchema)),
+  dreaming: Type.Optional(Type.Any()),
   openclawMemoryCompat: Type.Optional(Type.Boolean()),
   openclawMemoryWorkspacePath: Type.Optional(Type.String()),
   openclawCanonicalMemory: Type.Optional(Type.Boolean()),

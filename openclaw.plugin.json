@@ -68,6 +68,10 @@
       "openclawCanonicalMemory": {
         "type": "boolean"
       },
+      "dreaming": {
+        "type": "object",
+        "additionalProperties": true
+      },
       "kbAutoIndexSessions": {
         "type": "boolean"
       },
