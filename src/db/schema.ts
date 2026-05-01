@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 export const SCHEMA_STATEMENTS = [
   `
@@ -172,6 +172,46 @@ export const SCHEMA_STATEMENTS = [
     was_referenced INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (chunk_id) REFERENCES kb_chunks(chunk_id) ON DELETE CASCADE
+  )
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS memory_claims (
+    claim_id TEXT PRIMARY KEY,
+    source_kind TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0.75,
+    freshness TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS engram_commitments (
+    commitment_id TEXT PRIMARY KEY,
+    content TEXT NOT NULL,
+    due_at TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    scope TEXT NOT NULL DEFAULT 'session',
+    source_conversation_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT,
+    FOREIGN KEY (source_conversation_id) REFERENCES conversations(conversation_id)
+  )
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS engram_dream_candidates (
+    candidate_id TEXT PRIMARY KEY,
+    content TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    score REAL NOT NULL DEFAULT 0,
+    recall_count INTEGER NOT NULL DEFAULT 0,
+    query_count INTEGER NOT NULL DEFAULT 0,
+    promoted INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
   )
   `,
 ] as const;

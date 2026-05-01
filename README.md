@@ -24,6 +24,12 @@ No external services required. No separate databases to manage. One plugin, one 
 - Persona file injection via `prependSystemContext`
 - Approved fact storage, review, export, search, and recall
 - Lightweight conflict surfacing for similar durable facts
+- OpenClaw memory compatibility tools (`memory_search`, `memory_get`, and `memory_recall`) backed by Engram
+- Automatic pointer-mode indexing for canonical OpenClaw memory files (`MEMORY.md`, `memory/*.md`, and `DREAMS.md`) when present
+- Small active-recall injections by default: one compact memory, short snippets, and stricter prompt gates
+- Short-lived commitment storage for follow-up memories that should not become durable facts
+- Dream candidate staging for reviewable durable-memory promotion work
+- Provenance claim rows for explicit facts, ready for wiki-style freshness and contradiction tracking
 - Dedicated session-summary recall lane — surfaces past conversation context alongside document results, with conversation-aware scoring that boosts matches from the same channel/surface
 - Recall diversity filter — one chunk per source document, so limited recall slots aren't wasted on multiple hits from the same file
 - Temporal query filtering — `engram_search` and `/engram search` accept `--since`/`--until` date ranges; the recall hook also extracts temporal phrases ("last week", "yesterday") from user queries automatically
@@ -58,12 +64,17 @@ Engram currently exposes these tools:
 - `engram_status`
 - `engram_search`
 - `engram_get`
+- `memory_search`
+- `memory_get`
+- `memory_recall`
 - `engram_index`
 - `engram_export`
 - `engram_persona`
 - `engram_remember`
 - `engram_forget`
 - `engram_review`
+- `engram_commitment`
+- `engram_dreams`
 
 ## Config
 
@@ -79,6 +90,9 @@ Supported plugin config keys:
 - `kbCollections`
 - `kbCollections[].indexMode` (`full` or `pointer`)
 - `kbCollections[].recallWeight`
+- `openclawMemoryCompat`
+- `openclawMemoryWorkspacePath`
+- `openclawCanonicalMemory`
 - `kbAutoIndexSessions`
 - `kbSessionIndexCircuitBreaker`
 - `kbAutoIndexOnStart`
@@ -98,8 +112,12 @@ Supported plugin config keys:
 - `kbSearchTimeoutMs`
 - `maxSearchCandidates`
 - `recallMaxTokens`
+- `recallMaxSnippetChars`
 - `recallMaxResults`
 - `recallPrependMaxTokens`
+- `activeRecallEnabled`
+- `activeRecallMinQueryChars`
+- `activeRecallMaxSummaryChars`
 - `recallMinScore`
 - `recallGapThreshold`
 - `recallHighConfidenceScore`
@@ -153,6 +171,7 @@ Important logical areas inside the database:
 - A dedicated session-summary search pass surfaces past conversation context with conversation-aware scoring (same-channel boosts)
 - Recall diversity filter ensures one chunk per source document, relaxing only when there aren't enough unique sources
 - Stored embeddings can rerank lexical KB candidates when embedding search is enabled (with timeout fallback to pure lexical)
+- When embeddings are enabled, vector candidates are searched directly and merged with lexical candidates using reciprocal-rank fusion
 - Temporal filtering constrains results by date range when `--since`/`--until` are provided or temporal phrases are detected in the query
 - Keyword bypass matches skip temporal decay for always-relevant terms
 - Configured collection sync respects each collection's declared glob pattern; incremental sync skips unchanged files

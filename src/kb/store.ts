@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { resolve } from "node:path";
 import type { EngramConfig } from "../config.js";
+import { isOpenClawEvergreenCollection, normalizeCollectionName, resolveOpenClawMemoryCollections } from "../openclaw-memory.js";
 import { EmbeddingClient, decodeEmbedding } from "./embeddings.js";
 
 const LIKE_FALLBACK_MAX_CHUNKS = 5_000;
@@ -71,7 +72,12 @@ export async function searchKnowledgeBase(
       .slice(0, config.maxSearchCandidates);
 
     const remainingBudgetMs = Math.max(0, config.kbSearchTimeoutMs - elapsedAfterLexical);
-    const reranked = await rerankWithEmbeddings(db, config, query, lexicalResults, remainingBudgetMs);
+    const reranked = await rerankWithEmbeddings(db, config, query, lexicalResults, remainingBudgetMs, {
+      collection: options.collection,
+      excludeCollections: options.excludeCollections,
+      since: options.since,
+      until: options.until,
+    });
     return reranked.slice(0, options.limit ?? 5);
   } finally {
     db.close();
@@ -459,7 +465,14 @@ function computeScore(
   row: { relPath: string; title: string; content: string; collectionName?: string; indexedAt: string; derivationDepth: number },
   tokens: string[],
   query: string,
-  config: Pick<EngramConfig, "kbCollections" | "recallKeywordBypassMinLength" | "recallKeywordBypassMaxTerms">,
+  config: Pick<
+    EngramConfig,
+    | "kbCollections"
+    | "openclawCanonicalMemory"
+    | "openclawMemoryWorkspacePath"
+    | "recallKeywordBypassMinLength"
+    | "recallKeywordBypassMaxTerms"
+  >,
 ): number {
   const content = row.content.toLowerCase();
   const title = row.title.toLowerCase();
@@ -479,7 +492,7 @@ function computeScore(
 }
 
 function collectionWeight(
-  config: Pick<EngramConfig, "kbCollections">,
+  config: Pick<EngramConfig, "kbCollections" | "openclawCanonicalMemory" | "openclawMemoryWorkspacePath">,
   collectionName?: string,
 ): number {
   if (!collectionName) {
@@ -488,7 +501,8 @@ function collectionWeight(
   if (collectionName === "__sessions") {
     return 0.7;
   }
-  const configured = config.kbCollections.find((collection) => normalizeCollectionName(collection.name) === collectionName);
+  const configured = resolveOpenClawMemoryCollections(config)
+    .find((collection) => normalizeCollectionName(collection.name) === collectionName);
   return configured?.recallWeight ?? 1;
 }
 
@@ -497,6 +511,9 @@ function derivationWeight(derivationDepth: number): number {
 }
 
 function decayWeight(indexedAt: string, collectionName?: string): number {
+  if (isOpenClawEvergreenCollection(collectionName)) {
+    return 1;
+  }
   if (collectionName === "__sessions") {
     return halfLifeWeight(indexedAt, 7);
   }
@@ -535,8 +552,9 @@ async function rerankWithEmbeddings(
   query: string,
   rows: KBSearchRow[],
   remainingBudgetMs: number,
+  options: { collection?: string; excludeCollections?: string[]; since?: string; until?: string } = {},
 ): Promise<KBSearchRow[]> {
-  if (!config.embedEnabled || rows.length === 0) {
+  if (!config.embedEnabled) {
     return rows;
   }
 
@@ -550,38 +568,20 @@ async function rerankWithEmbeddings(
     return rows;
   }
 
-  const placeholders = rows.map(() => "?").join(", ");
-  const embeddingRows = db.prepare(`
-    SELECT chunk_id AS chunkId, vector, dimensions
-    FROM kb_embeddings
-    WHERE model = ? AND chunk_id IN (${placeholders})
-  `).all(config.embedApiModel, ...rows.map((row) => row.chunkId)) as Array<{
-    chunkId: string;
-    vector: Uint8Array;
-    dimensions: number | null;
-  }>;
-  if (embeddingRows.length === 0) {
+  const semanticCandidates = queryVectorCandidates(db, config, queryVector, options);
+  if (semanticCandidates.length === 0 && rows.length === 0) {
     return rows;
   }
 
-  const vectorByChunkId = new Map(
-    embeddingRows.map((row) => [row.chunkId, decodeEmbedding(row.vector, row.dimensions)]),
-  );
   const lexicalRanks = new Map(rows.map((row, index) => [row.chunkId, index + 1]));
-  const semanticRows = rows
-    .map((row) => ({
-      chunkId: row.chunkId,
-      semanticScore: (() => {
-        const chunkVector = vectorByChunkId.get(row.chunkId);
-        return chunkVector ? Math.max(0, cosineSimilarity(queryVector, chunkVector)) : -1;
-      })(),
-    }))
-      .filter((row) => row.semanticScore >= 0)
-      .sort((left, right) => right.semanticScore - left.semanticScore || left.chunkId.localeCompare(right.chunkId));
-  const semanticRanks = new Map(semanticRows.map((row, index) => [row.chunkId, index + 1]));
-  const semanticScores = new Map(semanticRows.map((row) => [row.chunkId, row.semanticScore]));
+  const semanticRanks = new Map(semanticCandidates.map((row, index) => [row.chunkId, index + 1]));
+  const semanticScores = new Map(semanticCandidates.map((row) => [row.chunkId, row.semanticScore]));
+  const rowsByChunk = new Map<string, KBSearchRow>();
+  for (const row of [...rows, ...semanticCandidates]) {
+    rowsByChunk.set(row.chunkId, row);
+  }
 
-  return rows
+  return [...rowsByChunk.values()]
     .map((row) => {
       const lexicalRank = lexicalRanks.get(row.chunkId);
       const semanticRank = semanticRanks.get(row.chunkId);
@@ -595,6 +595,81 @@ async function rerankWithEmbeddings(
     })
     .sort((left, right) => right.score - left.score || right.semanticScore - left.semanticScore || left.relPath.localeCompare(right.relPath))
     .map(({ semanticScore: _semanticScore, ...row }) => row);
+}
+
+function queryVectorCandidates(
+  db: DatabaseSync,
+  config: EngramConfig,
+  queryVector: number[],
+  options: { collection?: string; excludeCollections?: string[]; since?: string; until?: string },
+): Array<KBSearchRow & { semanticScore: number }> {
+  const params: Array<string | number | null> = [config.embedApiModel];
+  let sql = `
+    SELECT
+      kc.chunk_id AS chunkId,
+      kd.doc_id AS docId,
+      kd.collection_name AS collectionName,
+      kd.rel_path AS relPath,
+      kd.title AS title,
+      kc.content AS content,
+      kd.indexed_at AS indexedAt,
+      kc.derivation_depth AS derivationDepth,
+      ke.vector AS vector,
+      ke.dimensions AS dimensions
+    FROM kb_embeddings ke
+    JOIN kb_chunks kc ON kc.chunk_id = ke.chunk_id
+    JOIN kb_documents kd ON kd.doc_id = kc.doc_id
+    WHERE ke.model = ?
+  `;
+  if (options.collection) {
+    sql += " AND kd.collection_name = ?";
+    params.push(options.collection);
+  }
+  const excluded = options.excludeCollections ?? [];
+  if (excluded.length > 0) {
+    sql += ` AND kd.collection_name NOT IN (${excluded.map(() => "?").join(", ")})`;
+    params.push(...excluded);
+  }
+  if (options.since) {
+    sql += " AND kd.indexed_at >= ?";
+    params.push(options.since);
+  }
+  if (options.until) {
+    sql += " AND kd.indexed_at <= ?";
+    params.push(options.until);
+  }
+
+  const rows = db.prepare(sql).all(...params) as Array<{
+    chunkId: string;
+    docId: string;
+    collectionName: string;
+    relPath: string;
+    title: string;
+    content: string;
+    indexedAt: string;
+    derivationDepth: number;
+    vector: Uint8Array;
+    dimensions: number | null;
+  }>;
+
+  return rows
+    .map((row) => ({
+      chunkId: row.chunkId,
+      docId: row.docId,
+      collectionName: row.collectionName,
+      relPath: row.relPath,
+      title: row.title,
+      content: row.content,
+      score: 0,
+      indexedAt: row.indexedAt,
+      derivationDepth: row.derivationDepth,
+      memoryClass: deriveMemoryClass(row.collectionName),
+      sourceKind: "document_derived" as const,
+      semanticScore: cosineSimilarity(queryVector, decodeEmbedding(row.vector, row.dimensions)),
+    }))
+    .filter((row) => row.semanticScore > 0)
+    .sort((left, right) => right.semanticScore - left.semanticScore || left.relPath.localeCompare(right.relPath))
+    .slice(0, config.maxSearchCandidates);
 }
 
 function rrfScore(rank: number | undefined, k: number): number {
@@ -635,21 +710,17 @@ function escapeRegex(value: string): string {
 }
 
 function resolvePointerSourcePath(
-  config: Pick<EngramConfig, "kbCollections">,
+  config: Pick<EngramConfig, "kbCollections" | "openclawCanonicalMemory" | "openclawMemoryWorkspacePath">,
   collectionName: string,
   relPath: string,
 ): string | null {
-  const collection = config.kbCollections.find(
+  const collection = resolveOpenClawMemoryCollections(config).find(
     (entry) => normalizeCollectionName(entry.name) === collectionName && entry.indexMode === "pointer",
   );
   if (!collection) {
     return null;
   }
   return resolve(collection.path, relPath);
-}
-
-function normalizeCollectionName(value: string): string {
-  return value.trim().replace(/[^a-z0-9_-]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase() || "manual";
 }
 
 function deriveMemoryClass(collectionName: string): "task" | "reference" {

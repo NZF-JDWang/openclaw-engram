@@ -47,9 +47,26 @@
             },
             "description": {
               "type": "string"
+            },
+            "indexMode": {
+              "type": "string",
+              "enum": ["full", "pointer"]
+            },
+            "recallWeight": {
+              "type": "number",
+              "minimum": 0
             }
           }
         }
+      },
+      "openclawMemoryCompat": {
+        "type": "boolean"
+      },
+      "openclawMemoryWorkspacePath": {
+        "type": "string"
+      },
+      "openclawCanonicalMemory": {
+        "type": "boolean"
       },
       "kbAutoIndexSessions": {
         "type": "boolean"
@@ -143,6 +160,10 @@
         "type": "integer",
         "minimum": 1
       },
+      "recallMaxSnippetChars": {
+        "type": "integer",
+        "minimum": 40
+      },
       "recallMaxResults": {
         "type": "integer",
         "minimum": 1
@@ -150,6 +171,17 @@
       "recallPrependMaxTokens": {
         "type": "integer",
         "minimum": 1
+      },
+      "activeRecallEnabled": {
+        "type": "boolean"
+      },
+      "activeRecallMinQueryChars": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "activeRecallMaxSummaryChars": {
+        "type": "integer",
+        "minimum": 40
       },
       "recallShadowMode": {
         "type": "boolean"

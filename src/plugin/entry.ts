@@ -12,10 +12,15 @@ import {
   createEngramForgetTool,
   createEngramGetTool,
   createEngramIndexTool,
+  createEngramCommitmentTool,
+  createEngramDreamsTool,
   createEngramRememberTool,
   createEngramReviewTool,
   createEngramSearchTool,
   createEngramStatusTool,
+  createMemoryGetTool,
+  createMemoryRecallTool,
+  createMemorySearchTool,
 } from "./tools.js";
 
 export default definePluginEntry({
@@ -35,7 +40,11 @@ export default definePluginEntry({
 
     const createEngine = () => new EngramContextEngine(openDatabase(config.dbPath), config, api.runtime);
 
-    if (config.kbEnabled && config.kbAutoIndexOnStart && config.kbCollections.length > 0) {
+    if (
+      config.kbEnabled
+      && config.kbAutoIndexOnStart
+      && (config.kbCollections.length > 0 || config.openclawCanonicalMemory)
+    ) {
       queueMicrotask(() => {
         void syncConfiguredCollections(config).catch((error: unknown) => {
           const message = error instanceof Error ? error.message : String(error);
@@ -50,11 +59,18 @@ export default definePluginEntry({
     api.registerTool(() => createEngramStatusTool(config));
     api.registerTool(() => createEngramSearchTool(config));
     api.registerTool(() => createEngramGetTool(config));
+    if (config.openclawMemoryCompat) {
+      api.registerTool(() => createMemorySearchTool(config));
+      api.registerTool(() => createMemoryGetTool(config));
+      api.registerTool(() => createMemoryRecallTool(config));
+    }
     api.registerTool(() => createEngramIndexTool(config));
     api.registerTool(() => createEngramExportTool(config));
     api.registerTool(() => createEngramRememberTool(config));
     api.registerTool(() => createEngramForgetTool(config));
     api.registerTool(() => createEngramReviewTool(config));
+    api.registerTool(() => createEngramCommitmentTool(config));
+    api.registerTool(() => createEngramDreamsTool(config));
     api.on("before_prompt_build", createBeforePromptBuildHook(config));
   },
 });

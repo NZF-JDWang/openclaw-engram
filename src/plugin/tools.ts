@@ -5,6 +5,13 @@ import { deleteExplicitFact, findConflictingFacts, indexPath, listExplicitFacts,
 import { getKnowledgeDocument, searchKnowledgeBase } from "../kb/store.js";
 import { openDatabase } from "../db/connection.js";
 import { exportMemories } from "./export.js";
+import {
+  completeCommitment,
+  listCommitments,
+  listDreamCandidates,
+  stageDreamCandidate,
+  storeCommitment,
+} from "./memory-layers.js";
 import { formatStatus, readStatus } from "./status.js";
 
 export function createEngramStatusTool(config: EngramConfig): AnyAgentTool {
@@ -41,10 +48,40 @@ export function createEngramStatusTool(config: EngramConfig): AnyAgentTool {
 }
 
 export function createEngramSearchTool(config: EngramConfig): AnyAgentTool {
-  return {
+  return createSearchTool(config, {
     name: "engram_search",
     label: "Engram Search",
     description: "Search imported and indexed Engram knowledge base chunks",
+    compactOutput: false,
+  });
+}
+
+export function createMemorySearchTool(config: EngramConfig): AnyAgentTool {
+  return createSearchTool(config, {
+    name: "memory_search",
+    label: "Memory Search",
+    description: "OpenClaw-compatible memory search backed by Engram",
+    compactOutput: true,
+  });
+}
+
+export function createMemoryRecallTool(config: EngramConfig): AnyAgentTool {
+  return createSearchTool(config, {
+    name: "memory_recall",
+    label: "Memory Recall",
+    description: "OpenClaw-compatible memory recall backed by Engram; returns compact relevant memory snippets",
+    compactOutput: true,
+  });
+}
+
+function createSearchTool(
+  config: EngramConfig,
+  tool: { name: string; label: string; description: string; compactOutput: boolean },
+): AnyAgentTool {
+  return {
+    name: tool.name,
+    label: tool.label,
+    description: tool.description,
     parameters: Type.Object({
       query: Type.String(),
       maxResults: Type.Optional(Type.Number({ minimum: 1, maximum: 20 })),
@@ -88,11 +125,13 @@ export function createEngramSearchTool(config: EngramConfig): AnyAgentTool {
               type: "text",
               text:
                 results.length === 0
-                  ? `No KB results for: ${query}`
+                  ? `No memory results for: ${query}`
                   : results
                       .map(
                         (result) =>
-                          `[${result.collectionName}] ${result.relPath} (source_kind ${result.sourceKind}, score ${result.score})\n${truncate(result.content, 200)}`,
+                          tool.compactOutput
+                            ? `${result.chunkId} [${result.collectionName}] ${result.relPath} score=${result.score.toFixed(3)}\n${truncate(result.content, 160)}`
+                            : `[${result.collectionName}] ${result.relPath} (source_kind ${result.sourceKind}, score ${result.score})\n${truncate(result.content, 200)}`,
                       )
                       .join("\n\n"),
             },
@@ -110,10 +149,29 @@ export function createEngramSearchTool(config: EngramConfig): AnyAgentTool {
 }
 
 export function createEngramGetTool(config: EngramConfig): AnyAgentTool {
-  return {
+  return createGetTool(config, {
     name: "engram_get",
     label: "Engram Get",
     description: "Fetch the full content of an Engram KB document by doc id, chunk id, or relative path",
+  });
+}
+
+export function createMemoryGetTool(config: EngramConfig): AnyAgentTool {
+  return createGetTool(config, {
+    name: "memory_get",
+    label: "Memory Get",
+    description: "OpenClaw-compatible memory fetch backed by Engram; accepts document id, chunk id, or relative path",
+  });
+}
+
+function createGetTool(
+  config: EngramConfig,
+  tool: { name: string; label: string; description: string },
+): AnyAgentTool {
+  return {
+    name: tool.name,
+    label: tool.label,
+    description: tool.description,
     parameters: Type.Object({
       id: Type.String(),
     }),
@@ -378,6 +436,133 @@ export function createEngramConflictsTool(config: EngramConfig): AnyAgentTool {
           content: [{ type: "text", text: `Conflicts check failed: ${error instanceof Error ? error.message : String(error)}` }],
           details: { error: String(error) },
         };
+      }
+    },
+  };
+}
+
+export function createEngramCommitmentTool(config: EngramConfig): AnyAgentTool {
+  return {
+    name: "engram_commitment",
+    label: "Engram Commitment",
+    description: "Store, list, or complete short-lived follow-up commitments without adding them to durable memory.",
+    parameters: Type.Object({
+      action: Type.Optional(Type.Union([Type.Literal("store"), Type.Literal("list"), Type.Literal("due"), Type.Literal("complete")])),
+      content: Type.Optional(Type.String()),
+      dueAt: Type.Optional(Type.String({ description: "Optional ISO date/datetime for when the commitment is due." })),
+      commitmentId: Type.Optional(Type.String()),
+      sourceConversationId: Type.Optional(Type.String()),
+      limit: Type.Optional(Type.Number({ minimum: 1, maximum: 50 })),
+    }),
+    async execute(_toolCallId, input) {
+      const action = typeof input.action === "string" ? input.action : "list";
+      const database = openDatabase(config.dbPath);
+      try {
+        if (action === "store") {
+          const content = typeof input.content === "string" ? input.content.trim() : "";
+          if (!content) {
+            return { content: [{ type: "text", text: "content is required for action=store." }], details: { error: "empty_content" } };
+          }
+          const row = storeCommitment(database.db, {
+            content,
+            dueAt: typeof input.dueAt === "string" && input.dueAt.trim() ? input.dueAt.trim() : undefined,
+            sourceConversationId:
+              typeof input.sourceConversationId === "string" && input.sourceConversationId.trim()
+                ? input.sourceConversationId.trim()
+                : undefined,
+          });
+          return { content: [{ type: "text", text: `Stored commitment ${row.commitmentId}: ${row.content}` }], details: row };
+        }
+
+        if (action === "complete") {
+          const commitmentId = typeof input.commitmentId === "string" ? input.commitmentId.trim() : "";
+          if (!commitmentId) {
+            return { content: [{ type: "text", text: "commitmentId is required for action=complete." }], details: { error: "empty_id" } };
+          }
+          const completed = completeCommitment(database.db, commitmentId);
+          return {
+            content: [{ type: "text", text: completed ? `Completed commitment ${commitmentId}.` : `No open commitment found: ${commitmentId}` }],
+            details: { commitmentId, completed },
+          };
+        }
+
+        const rows = listCommitments(database.db, {
+          status: "open",
+          dueBefore: action === "due" ? new Date().toISOString() : undefined,
+          limit: typeof input.limit === "number" ? input.limit : 20,
+        });
+        return {
+          content: [{
+            type: "text",
+            text: rows.length === 0
+              ? "No matching commitments."
+              : rows.map((row) => `${row.commitmentId}${row.dueAt ? ` due=${row.dueAt}` : ""}: ${row.content}`).join("\n"),
+          }],
+          details: { commitments: rows },
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: `Commitment operation failed: ${error instanceof Error ? error.message : String(error)}` }],
+          details: { error: String(error) },
+        };
+      } finally {
+        database.close();
+      }
+    },
+  };
+}
+
+export function createEngramDreamsTool(config: EngramConfig): AnyAgentTool {
+  return {
+    name: "engram_dreams",
+    label: "Engram Dreams",
+    description: "Stage or list reviewable dream candidates for later durable-memory promotion.",
+    parameters: Type.Object({
+      action: Type.Optional(Type.Union([Type.Literal("stage"), Type.Literal("list")])),
+      content: Type.Optional(Type.String()),
+      sourceKind: Type.Optional(Type.String()),
+      sourceId: Type.Optional(Type.String()),
+      score: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+      minScore: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+      limit: Type.Optional(Type.Number({ minimum: 1, maximum: 50 })),
+    }),
+    async execute(_toolCallId, input) {
+      const action = typeof input.action === "string" ? input.action : "list";
+      const database = openDatabase(config.dbPath);
+      try {
+        if (action === "stage") {
+          const content = typeof input.content === "string" ? input.content.trim() : "";
+          if (!content) {
+            return { content: [{ type: "text", text: "content is required for action=stage." }], details: { error: "empty_content" } };
+          }
+          const row = stageDreamCandidate(database.db, {
+            content,
+            sourceKind: typeof input.sourceKind === "string" && input.sourceKind.trim() ? input.sourceKind.trim() : "manual",
+            sourceId: typeof input.sourceId === "string" && input.sourceId.trim() ? input.sourceId.trim() : "manual",
+            score: typeof input.score === "number" ? input.score : 0.5,
+          });
+          return { content: [{ type: "text", text: `Staged dream candidate ${row.candidateId}: ${truncate(row.content, 160)}` }], details: row };
+        }
+        const rows = listDreamCandidates(database.db, {
+          limit: typeof input.limit === "number" ? input.limit : 20,
+          minScore: typeof input.minScore === "number" ? input.minScore : undefined,
+        });
+        return {
+          content: [{
+            type: "text",
+            text: rows.length === 0
+              ? "No dream candidates."
+              : rows.map((row) => `${row.candidateId} score=${row.score.toFixed(2)} ${row.sourceKind}:${row.sourceId}\n${truncate(row.content, 180)}`).join("\n\n"),
+          }],
+          details: { candidates: rows },
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: `Dream operation failed: ${error instanceof Error ? error.message : String(error)}` }],
+          details: { error: String(error) },
+        };
+      } finally {
+        database.close();
       }
     },
   };

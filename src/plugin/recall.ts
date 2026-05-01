@@ -26,11 +26,11 @@ export type RecallCandidate = RecallMemory & { normalizedScore: number };
 export function createBeforePromptBuildHook(config: EngramConfig) {
   return async function handleBeforePromptBuild(event: { prompt?: string; messages?: unknown[]; sessionId?: string; conversationId?: string }) {
     try {
-      if (!(config.recallEnabled && config.kbEnabled)) {
+      if (!(config.recallEnabled && config.kbEnabled && config.activeRecallEnabled)) {
         return undefined;
       }
       const query = extractLatestUserQuery(event);
-      if (estimateSubstance(query) === 0) {
+      if (query.trim().length < config.activeRecallMinQueryChars || estimateSubstance(query) === 0) {
         return undefined;
       }
 
@@ -123,6 +123,7 @@ export function createBeforePromptBuildHook(config: EngramConfig) {
         query,
         diversified.map(toMemoryBlockItem),
         config.recallMaxTokens,
+        Math.min(config.recallMaxSnippetChars, config.activeRecallMaxSummaryChars),
       );
       if (!appendSystemContext) {
         return undefined;
@@ -168,6 +169,7 @@ export function formatRecallBlock(
   query: string,
   hits: Array<{ chunkId: string; collectionId: string; title: string; score: number; snippet: string; indexedAt?: string; sessionKey?: string; sessionCreatedAt?: string }>,
   maxTokens: number = 300,
+  maxSnippetChars: number = 220,
 ): string {
   let remainingTokens = maxTokens;
   const renderedHits: string[] = [];
@@ -175,7 +177,7 @@ export function formatRecallBlock(
     if (remainingTokens <= 0) {
       break;
     }
-    const snippet = truncateToTokens(hit.snippet, remainingTokens);
+    const snippet = truncateChars(truncateToTokens(hit.snippet, remainingTokens), maxSnippetChars);
     const snippetTokens = estimateTokens(snippet);
     if (snippetTokens <= 0) {
       continue;
@@ -193,6 +195,10 @@ export function formatRecallBlock(
       `  </memory>`,
     ].join("\n"));
     remainingTokens -= snippetTokens;
+  }
+
+  if (renderedHits.length === 0) {
+    return "";
   }
 
   return [
@@ -628,4 +634,12 @@ function sentenceOverlap(left: string[], right: string[]): number {
 
 function resolveRecallSessionKey(event: { sessionId?: string; conversationId?: string }): string {
   return event.sessionId?.trim() || event.conversationId?.trim() || "__default";
+}
+
+function truncateChars(value: string, maxChars: number): string {
+  const collapsed = value.replace(/\s+/g, " ").trim();
+  if (collapsed.length <= maxChars) {
+    return collapsed;
+  }
+  return `${collapsed.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
 }

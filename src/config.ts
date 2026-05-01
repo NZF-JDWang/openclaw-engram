@@ -20,6 +20,9 @@ export const EngramConfigSchema = Type.Object({
   summarizationModel: Type.Optional(Type.String()),
   kbEnabled: Type.Optional(Type.Boolean()),
   kbCollections: Type.Optional(Type.Array(EngramKbCollectionSchema)),
+  openclawMemoryCompat: Type.Optional(Type.Boolean()),
+  openclawMemoryWorkspacePath: Type.Optional(Type.String()),
+  openclawCanonicalMemory: Type.Optional(Type.Boolean()),
   kbAutoIndexSessions: Type.Optional(Type.Boolean()),
   kbSessionIndexCircuitBreaker: Type.Optional(Type.Boolean()),
   kbAutoIndexOnStart: Type.Optional(Type.Boolean()),
@@ -45,8 +48,12 @@ export const EngramConfigSchema = Type.Object({
   kbSearchTimeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
   maxSearchCandidates: Type.Optional(Type.Integer({ minimum: 1 })),
   recallMaxTokens: Type.Optional(Type.Integer({ minimum: 1 })),
+  recallMaxSnippetChars: Type.Optional(Type.Integer({ minimum: 40 })),
   recallMaxResults: Type.Optional(Type.Integer({ minimum: 1 })),
   recallPrependMaxTokens: Type.Optional(Type.Integer({ minimum: 1 })),
+  activeRecallEnabled: Type.Optional(Type.Boolean()),
+  activeRecallMinQueryChars: Type.Optional(Type.Integer({ minimum: 1 })),
+  activeRecallMaxSummaryChars: Type.Optional(Type.Integer({ minimum: 40 })),
   recallShadowMode: Type.Optional(Type.Boolean()),
   recallShadowLogFile: Type.Optional(Type.String()),
   recallKeywordBypassMinLength: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -71,6 +78,9 @@ export type EngramConfig = {
   summarizationModel?: string;
   kbEnabled: boolean;
   kbCollections: EngramKbCollection[];
+  openclawMemoryCompat: boolean;
+  openclawMemoryWorkspacePath: string;
+  openclawCanonicalMemory: boolean;
   kbAutoIndexSessions: boolean;
   kbSessionIndexCircuitBreaker: boolean;
   kbAutoIndexOnStart: boolean;
@@ -96,8 +106,12 @@ export type EngramConfig = {
   kbSearchTimeoutMs: number;
   maxSearchCandidates: number;
   recallMaxTokens: number;
+  recallMaxSnippetChars: number;
   recallMaxResults: number;
   recallPrependMaxTokens: number;
+  activeRecallEnabled: boolean;
+  activeRecallMinQueryChars: number;
+  activeRecallMaxSummaryChars: number;
   recallShadowMode: boolean;
   recallShadowLogFile?: string;
   recallKeywordBypassMinLength: number;
@@ -126,6 +140,8 @@ export type EngramKbCollection = {
 const DEFAULTS = {
   enabled: true,
   kbEnabled: true,
+  openclawMemoryCompat: true,
+  openclawCanonicalMemory: true,
   kbAutoIndexSessions: true,
   kbSessionIndexCircuitBreaker: true,
   kbAutoIndexOnStart: false,
@@ -149,9 +165,13 @@ const DEFAULTS = {
   summaryQualityThreshold: 50,
   kbSearchTimeoutMs: 150,
   maxSearchCandidates: 50,
-  recallMaxTokens: 300,
-  recallMaxResults: 3,
-  recallPrependMaxTokens: 300,
+  recallMaxTokens: 80,
+  recallMaxSnippetChars: 220,
+  recallMaxResults: 1,
+  recallPrependMaxTokens: 80,
+  activeRecallEnabled: true,
+  activeRecallMinQueryChars: 12,
+  activeRecallMaxSummaryChars: 220,
   recallShadowMode: false,
   recallKeywordBypassMinLength: 4,
   recallKeywordBypassMaxTerms: 3,
@@ -225,6 +245,15 @@ export function defaultExportPath(env: NodeJS.ProcessEnv = process.env): string 
   return join(stateDir || join(homedir(), ".openclaw"), "engram-export.md");
 }
 
+export function defaultOpenClawMemoryWorkspacePath(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = env.OPENCLAW_WORKSPACE_DIR?.trim() || env.OPENCLAW_WORKSPACE?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const stateDir = env.OPENCLAW_STATE_DIR?.trim();
+  return join(stateDir || join(homedir(), ".openclaw"), "workspace");
+}
+
 export function resolveEngramConfig(
   value: unknown,
   env: NodeJS.ProcessEnv = process.env,
@@ -238,6 +267,14 @@ export function resolveEngramConfig(
     summarizationModel: pickString(raw, "summarizationModel"),
     kbEnabled: pickBoolean(raw, "kbEnabled", DEFAULTS.kbEnabled),
     kbCollections: pickCollections(raw, "kbCollections"),
+    openclawMemoryCompat: pickBoolean(raw, "openclawMemoryCompat", DEFAULTS.openclawMemoryCompat),
+    openclawMemoryWorkspacePath:
+      pickString(raw, "openclawMemoryWorkspacePath") || defaultOpenClawMemoryWorkspacePath(env),
+    openclawCanonicalMemory: pickBoolean(
+      raw,
+      "openclawCanonicalMemory",
+      DEFAULTS.openclawCanonicalMemory,
+    ),
     kbAutoIndexSessions: pickBoolean(raw, "kbAutoIndexSessions", DEFAULTS.kbAutoIndexSessions),
     kbSessionIndexCircuitBreaker: pickBoolean(
       raw,
@@ -291,11 +328,23 @@ export function resolveEngramConfig(
     kbSearchTimeoutMs: pickNumber(raw, "kbSearchTimeoutMs", DEFAULTS.kbSearchTimeoutMs),
     maxSearchCandidates: pickNumber(raw, "maxSearchCandidates", DEFAULTS.maxSearchCandidates),
     recallMaxTokens: pickNumber(raw, "recallMaxTokens", DEFAULTS.recallMaxTokens),
+    recallMaxSnippetChars: pickNumber(raw, "recallMaxSnippetChars", DEFAULTS.recallMaxSnippetChars),
     recallMaxResults: pickNumber(raw, "recallMaxResults", DEFAULTS.recallMaxResults),
     recallPrependMaxTokens: pickNumber(
       raw,
       "recallPrependMaxTokens",
       DEFAULTS.recallPrependMaxTokens,
+    ),
+    activeRecallEnabled: pickBoolean(raw, "activeRecallEnabled", DEFAULTS.activeRecallEnabled),
+    activeRecallMinQueryChars: pickNumber(
+      raw,
+      "activeRecallMinQueryChars",
+      DEFAULTS.activeRecallMinQueryChars,
+    ),
+    activeRecallMaxSummaryChars: pickNumber(
+      raw,
+      "activeRecallMaxSummaryChars",
+      DEFAULTS.activeRecallMaxSummaryChars,
     ),
     recallShadowMode: pickBoolean(raw, "recallShadowMode", DEFAULTS.recallShadowMode),
     recallShadowLogFile: pickString(raw, "recallShadowLogFile"),

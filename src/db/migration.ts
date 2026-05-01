@@ -11,13 +11,66 @@ export function runMigrations(db: DatabaseSync): void {
   ensureSummaryQualityColumn(db);
   ensureKbFtsTable(db);
   ensureRecallEventsTable(db);
+  ensureMemoryLayerTables(db);
 
   db.exec(
     `
     INSERT OR IGNORE INTO engram_migrations (version, applied_at, description)
-    VALUES (${SCHEMA_VERSION}, datetime('now'), 'Engram schema bootstrap, summary quality tracking, durable-fact metadata expansion, KB FTS support, and recall feedback infra')
+    VALUES (${SCHEMA_VERSION}, datetime('now'), 'Engram schema bootstrap, summary quality tracking, durable-fact metadata expansion, KB FTS support, recall feedback infra, and OpenClaw memory layer tables')
     `,
   );
+}
+
+function ensureMemoryLayerTables(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memory_claims (
+      claim_id TEXT PRIMARY KEY,
+      source_kind TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      content TEXT NOT NULL,
+      confidence REAL NOT NULL DEFAULT 0.75,
+      freshness TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_memory_claims_source ON memory_claims (source_kind, source_id)
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS engram_commitments (
+      commitment_id TEXT PRIMARY KEY,
+      content TEXT NOT NULL,
+      due_at TEXT,
+      status TEXT NOT NULL DEFAULT 'open',
+      scope TEXT NOT NULL DEFAULT 'session',
+      source_conversation_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      completed_at TEXT,
+      FOREIGN KEY (source_conversation_id) REFERENCES conversations(conversation_id)
+    )
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_engram_commitments_due ON engram_commitments (status, due_at)
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS engram_dream_candidates (
+      candidate_id TEXT PRIMARY KEY,
+      content TEXT NOT NULL,
+      source_kind TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      score REAL NOT NULL DEFAULT 0,
+      recall_count INTEGER NOT NULL DEFAULT 0,
+      query_count INTEGER NOT NULL DEFAULT 0,
+      promoted INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_engram_dream_candidates_score ON engram_dream_candidates (promoted, score DESC)
+  `);
 }
 
 function ensureFactMetadataColumns(db: DatabaseSync): void {
