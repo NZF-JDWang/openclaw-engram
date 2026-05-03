@@ -1,6 +1,26 @@
 {
   "id": "engram",
+  "activation": {
+    "onStartup": true
+  },
   "kind": "context-engine",
+  "contracts": {
+    "tools": [
+      "engram_status",
+      "engram_search",
+      "engram_get",
+      "memory_search",
+      "memory_get",
+      "memory_recall",
+      "engram_index",
+      "engram_export",
+      "engram_remember",
+      "engram_forget",
+      "engram_review",
+      "engram_commitment",
+      "engram_dreams"
+    ]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

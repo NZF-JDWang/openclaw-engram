@@ -56,21 +56,21 @@ export default definePluginEntry({
     api.registerContextEngine("engram", createEngine);
     api.registerContextEngine("default", createEngine);
     api.registerCommand(createEngramCommand(config));
-    api.registerTool(() => createEngramStatusTool(config));
-    api.registerTool(() => createEngramSearchTool(config));
-    api.registerTool(() => createEngramGetTool(config));
+    api.registerTool(() => createEngramStatusTool(config), { name: "engram_status" });
+    api.registerTool(() => createEngramSearchTool(config), { name: "engram_search" });
+    api.registerTool(() => createEngramGetTool(config), { name: "engram_get" });
     if (config.openclawMemoryCompat) {
-      api.registerTool(() => createMemorySearchTool(config));
-      api.registerTool(() => createMemoryGetTool(config));
-      api.registerTool(() => createMemoryRecallTool(config));
+      api.registerTool(() => createMemorySearchTool(config), { name: "memory_search" });
+      api.registerTool(() => createMemoryGetTool(config), { name: "memory_get" });
+      api.registerTool(() => createMemoryRecallTool(config), { name: "memory_recall" });
     }
-    api.registerTool(() => createEngramIndexTool(config));
-    api.registerTool(() => createEngramExportTool(config));
-    api.registerTool(() => createEngramRememberTool(config));
-    api.registerTool(() => createEngramForgetTool(config));
-    api.registerTool(() => createEngramReviewTool(config));
-    api.registerTool(() => createEngramCommitmentTool(config));
-    api.registerTool(() => createEngramDreamsTool(config));
+    api.registerTool(() => createEngramIndexTool(config), { name: "engram_index" });
+    api.registerTool(() => createEngramExportTool(config), { name: "engram_export" });
+    api.registerTool(() => createEngramRememberTool(config), { name: "engram_remember" });
+    api.registerTool(() => createEngramForgetTool(config), { name: "engram_forget" });
+    api.registerTool(() => createEngramReviewTool(config), { name: "engram_review" });
+    api.registerTool(() => createEngramCommitmentTool(config), { name: "engram_commitment" });
+    api.registerTool(() => createEngramDreamsTool(config), { name: "engram_dreams" });
     api.on("before_prompt_build", createBeforePromptBuildHook(config));
   },
 });
