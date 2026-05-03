@@ -9,8 +9,6 @@
       "engram_status",
       "engram_search",
       "engram_get",
-      "memory_search",
-      "memory_get",
       "memory_recall",
       "engram_index",
       "engram_export",

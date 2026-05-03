@@ -44,6 +44,19 @@ describe("plugin entry", () => {
       "engram_status",
       "engram_search",
       "engram_get",
+      "memory_recall",
+      "engram_index",
+      "engram_export",
+      "engram_remember",
+      "engram_forget",
+      "engram_review",
+      "engram_commitment",
+      "engram_dreams",
+    ]);
+    expect(registeredToolNames).toEqual([
+      "engram_status",
+      "engram_search",
+      "engram_get",
       "memory_search",
       "memory_get",
       "memory_recall",
@@ -55,7 +68,7 @@ describe("plugin entry", () => {
       "engram_commitment",
       "engram_dreams",
     ]);
-    expect(registeredToolNames).toEqual(declaredToolNames);
+    expect(declaredToolNames.every((name) => registeredToolNames.includes(name))).toBe(true);
   });
 
   it("creates a fresh context engine per factory call after prior dispose", async () => {
