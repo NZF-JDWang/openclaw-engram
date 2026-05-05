@@ -1,6 +1,24 @@
 {
   "id": "engram",
+  "activation": {
+    "onStartup": true
+  },
   "kind": "context-engine",
+  "contracts": {
+    "tools": [
+      "engram_status",
+      "engram_search",
+      "engram_get",
+      "memory_recall",
+      "engram_index",
+      "engram_export",
+      "engram_remember",
+      "engram_forget",
+      "engram_review",
+      "engram_commitment",
+      "engram_dreams"
+    ]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -47,9 +65,30 @@
             },
             "description": {
               "type": "string"
+            },
+            "indexMode": {
+              "type": "string",
+              "enum": ["full", "pointer"]
+            },
+            "recallWeight": {
+              "type": "number",
+              "minimum": 0
             }
           }
         }
+      },
+      "openclawMemoryCompat": {
+        "type": "boolean"
+      },
+      "openclawMemoryWorkspacePath": {
+        "type": "string"
+      },
+      "openclawCanonicalMemory": {
+        "type": "boolean"
+      },
+      "dreaming": {
+        "type": "object",
+        "additionalProperties": true
       },
       "kbAutoIndexSessions": {
         "type": "boolean"
@@ -143,6 +182,10 @@
         "type": "integer",
         "minimum": 1
       },
+      "recallMaxSnippetChars": {
+        "type": "integer",
+        "minimum": 40
+      },
       "recallMaxResults": {
         "type": "integer",
         "minimum": 1
@@ -150,6 +193,17 @@
       "recallPrependMaxTokens": {
         "type": "integer",
         "minimum": 1
+      },
+      "activeRecallEnabled": {
+        "type": "boolean"
+      },
+      "activeRecallMinQueryChars": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "activeRecallMaxSummaryChars": {
+        "type": "integer",
+        "minimum": 40
       },
       "recallShadowMode": {
         "type": "boolean"

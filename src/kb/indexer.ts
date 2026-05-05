@@ -5,6 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { basename, extname, relative, resolve } from "node:path";
 import type { EngramConfig, EngramKbCollection } from "../config.js";
 import { openDatabase, retryOnBusy } from "../db/connection.js";
+import { normalizeCollectionName, resolveOpenClawMemoryCollections } from "../openclaw-memory.js";
 import { estimateTokens } from "../token-estimate.js";
 import { chunkDocument } from "./chunker.js";
 import { EmbeddingClient, decodeEmbedding, encodeEmbedding } from "./embeddings.js";
@@ -106,7 +107,7 @@ export async function indexPath(
 
 export async function syncConfiguredCollections(config: EngramConfig): Promise<SyncCollectionsResult> {
   const collections: IndexPathResult[] = [];
-  for (const collection of config.kbCollections) {
+  for (const collection of resolveOpenClawMemoryCollections(config)) {
     collections.push(
       await indexResolvedCollection(config, {
         ...collection,
@@ -579,10 +580,6 @@ function deriveSummaryLine(body: string): string | undefined {
   return candidate.length <= 220 ? candidate : `${candidate.slice(0, 217)}...`;
 }
 
-function normalizeCollectionName(value: string): string {
-  return value.trim().replace(/[^a-z0-9_-]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase() || "manual";
-}
-
 function normalizeRelPath(value: string): string {
   return value.replace(/\\/g, "/");
 }
@@ -800,6 +797,13 @@ export async function storeExplicitFact(
       insertFtsChunk?.run(chunkId, docId, FACTS_COLLECTION_NAME, relPath, title, chunk.text);
       indexedChunks.push({ chunkId, text: chunk.text });
     });
+
+    db.prepare(`
+      INSERT INTO memory_claims (
+        claim_id, source_kind, source_id, content, confidence, freshness, status, created_at, updated_at
+      )
+      VALUES (?, 'explicit_fact', ?, ?, 0.9, NULL, 'active', datetime('now'), datetime('now'))
+    `).run(randomUUID(), factId, params.content);
 
     db.exec("COMMIT");
   } catch (error) {

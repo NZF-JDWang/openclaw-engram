@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -18,6 +18,59 @@ afterEach(() => {
 });
 
 describe("plugin entry", () => {
+  it("declares and registers OpenClaw tool contracts by explicit name", () => {
+    const root = mkdtempSync(join(tmpdir(), "engram-entry-tools-"));
+    tempPaths.push(root);
+    const dbPath = join(root, "engram.db");
+    const registeredToolNames: string[] = [];
+
+    plugin.register({
+      pluginConfig: { dbPath, openclawMemoryCompat: true },
+      runtime: {} as never,
+      registerContextEngine() {},
+      registerCommand() {},
+      registerTool(_tool: unknown, opts?: { name?: string; names?: string[] }) {
+        registeredToolNames.push(...(opts?.names ?? []), ...(opts?.name ? [opts.name] : []));
+      },
+      on() {},
+    } as unknown as OpenClawPluginApi);
+
+    const manifest = JSON.parse(readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8")) as {
+      contracts?: { tools?: string[] };
+    };
+    const declaredToolNames = manifest.contracts?.tools ?? [];
+
+    expect(declaredToolNames).toEqual([
+      "engram_status",
+      "engram_search",
+      "engram_get",
+      "memory_recall",
+      "engram_index",
+      "engram_export",
+      "engram_remember",
+      "engram_forget",
+      "engram_review",
+      "engram_commitment",
+      "engram_dreams",
+    ]);
+    expect(registeredToolNames).toEqual([
+      "engram_status",
+      "engram_search",
+      "engram_get",
+      "memory_search",
+      "memory_get",
+      "memory_recall",
+      "engram_index",
+      "engram_export",
+      "engram_remember",
+      "engram_forget",
+      "engram_review",
+      "engram_commitment",
+      "engram_dreams",
+    ]);
+    expect(declaredToolNames.every((name) => registeredToolNames.includes(name))).toBe(true);
+  });
+
   it("creates a fresh context engine per factory call after prior dispose", async () => {
     const root = mkdtempSync(join(tmpdir(), "engram-entry-"));
     tempPaths.push(root);
