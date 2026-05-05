@@ -84,6 +84,60 @@ describe("EngramContextEngine", () => {
     }
   });
 
+  it("persists new turn messages from afterTurn so UUID sessions can compact and recall", async () => {
+    const root = mkdtempSync(join(tmpdir(), "engram-engine-afterturn-ingest-"));
+    tempPaths.push(root);
+    const dbPath = join(root, "engram.db");
+    const database = openDatabase(dbPath);
+    const config = resolveEngramConfig({
+      dbPath,
+      freshTailCount: 2,
+      leafTargetTokens: 20,
+      condensedTargetTokens: 20,
+    });
+    const engine = new EngramContextEngine(database, config);
+    const transcript = [
+      { role: "user", content: "Preserve qmd chunk metadata during every migration import." },
+      { role: "assistant", content: "Every migration import will preserve qmd chunk metadata." },
+      { role: "user", content: "Keep audit trails so repeated imports remain idempotent." },
+      { role: "assistant", content: "Audit trails will keep repeated imports idempotent." },
+      { role: "user", content: "Index compacted summaries so recall can find decisions later." },
+      { role: "assistant", content: "Compacted summaries will stay searchable for later recall." },
+    ];
+
+    try {
+      await engine.bootstrap({ sessionId: "uuid-session", sessionFile: "uuid-session.jsonl", sessionKey: "uuid-key" });
+
+      for (let index = 2; index <= transcript.length; index += 2) {
+        await engine.afterTurn({
+          sessionId: "uuid-session",
+          sessionKey: "uuid-key",
+          sessionFile: "uuid-session.jsonl",
+          messages: transcript.slice(0, index),
+          prePromptMessageCount: index - 2,
+        });
+      }
+
+      const messageCount = (
+        database.db.prepare("SELECT COUNT(*) AS count FROM messages WHERE conversation_id = 'uuid-session'").get() as { count: number }
+      ).count;
+      const summaryCount = (
+        database.db.prepare("SELECT COUNT(*) AS count FROM summaries WHERE conversation_id = 'uuid-session'").get() as { count: number }
+      ).count;
+      const assembled = await engine.assemble({
+        sessionId: "uuid-session",
+        messages: [{ role: "user", content: "What did we decide?" }],
+        tokenBudget: 1000,
+      });
+
+      expect(messageCount).toBe(transcript.length);
+      expect(summaryCount).toBeGreaterThan(0);
+      expect(assembled.estimatedTokens).toBeGreaterThan(0);
+    } finally {
+      await engine.dispose();
+    }
+  });
+
   it("afterTurn scans the assistant response and marks recall events as referenced", async () => {
     const root = mkdtempSync(join(tmpdir(), "engram-engine-feedback-"));
     tempPaths.push(root);

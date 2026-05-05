@@ -38,11 +38,7 @@ export class EngramContextEngine implements ContextEngine {
     sessionKey?: string;
     sessionFile: string;
   }): Promise<BootstrapResult> {
-    const statement = this.database.db.prepare(`
-      INSERT OR IGNORE INTO conversations (conversation_id, session_id, session_key, created_at)
-      VALUES (?, ?, ?, datetime('now'))
-    `);
-    statement.run(params.sessionId, params.sessionId, params.sessionKey ?? null);
+    this.ensureConversation(params.sessionId, params.sessionKey);
     return { bootstrapped: true, importedMessages: 0 };
   }
 
@@ -51,6 +47,7 @@ export class EngramContextEngine implements ContextEngine {
     sessionKey?: string;
     message: { role?: string; content?: unknown };
   }): Promise<IngestResult> {
+    this.ensureConversation(params.sessionId, params.sessionKey);
     const role = typeof params.message.role === "string" ? params.message.role : "unknown";
     const content = sanitizeStoredContent(
       normalizeContent(params.message.content),
@@ -134,6 +131,15 @@ export class EngramContextEngine implements ContextEngine {
     tokenBudget?: number;
     runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<void> {
+    const newMessages = this.resolveAfterTurnMessages(params);
+    if (newMessages.length > 0) {
+      await this.ingestBatch({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        messages: newMessages,
+      });
+    }
+
     try {
       const result = await compactConversation(this.database.db, {
         conversationId: params.sessionId,
@@ -250,6 +256,30 @@ export class EngramContextEngine implements ContextEngine {
 
   private buildSystemPromptAddition(): string {
     return `<engram_status kb_enabled="${this.config.kbEnabled}" recall_enabled="${this.config.recallEnabled}" />`;
+  }
+
+  private ensureConversation(sessionId: string, sessionKey?: string): void {
+    this.database.db.prepare(`
+      INSERT OR IGNORE INTO conversations (conversation_id, session_id, session_key, created_at)
+      VALUES (?, ?, ?, datetime('now'))
+    `).run(sessionId, sessionId, sessionKey ?? null);
+  }
+
+  private resolveAfterTurnMessages(params: {
+    sessionId: string;
+    prePromptMessageCount: number;
+    messages: Array<{ role?: string; content?: unknown }>;
+  }): Array<{ role?: string; content?: unknown }> {
+    if (params.prePromptMessageCount < params.messages.length) {
+      return params.messages.slice(params.prePromptMessageCount);
+    }
+
+    const storedCount = this.countMessages(params.sessionId);
+    if (storedCount === 0 || storedCount === params.prePromptMessageCount) {
+      return params.messages;
+    }
+
+    return [];
   }
 }
 
