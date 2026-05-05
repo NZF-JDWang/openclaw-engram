@@ -275,7 +275,11 @@ export class EngramContextEngine implements ContextEngine {
     }
 
     const storedCount = this.countMessages(params.sessionId);
-    if (storedCount === 0 || storedCount === params.prePromptMessageCount) {
+    if (storedCount === 0) {
+      return params.messages;
+    }
+
+    if (params.prePromptMessageCount > 0 && storedCount === params.prePromptMessageCount) {
       return params.messages;
     }
 
